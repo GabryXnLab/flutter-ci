@@ -56,7 +56,7 @@ workflow lo verificano e si fermano subito se manca.
 | Pub cache | `/home/ubuntu/.pub-cache` | Condivisa fra i run: è ciò che rende `flutter pub get` quasi istantaneo. |
 | QEMU 10 x86-64 | `/home/ubuntu/qemu-x86_64-10/bin/qemu-x86_64` | Serve all'AOT Android: Flutter non pubblica `gen_snapshot` per host linux-arm64 e quello x86-64 sotto il QEMU di sistema (8.2) va in SIGSEGV. È l'unico che il workflow **installa da sé** se manca, sotto `$HOME` e senza sudo. |
 
-Tutti e tre i percorsi sono input con quel default: un runner diverso li sovrascrive
+Tutti questi percorsi sono input con quel default: un runner diverso li sovrascrive
 senza toccare questo repo.
 
 ## Perché non è un submodule

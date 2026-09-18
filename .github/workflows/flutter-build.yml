@@ -1,0 +1,346 @@
+name: Flutter Build (reusable)
+
+# Workflow riusabile per le build Flutter sul runner self-hosted `nexus-core` (ARM64).
+# Chiamato dai thin wrapper dei progetti via:
+#   uses: GabryXnLab/flutter-ci/.github/workflows/flutter-build.yml@main
+#
+# Produce un APK, un AAB o un bundle Linux desktop, lo carica come artifact del run
+# e lo manda nel topic Telegram indicato. Tutta la logica sta qui: nei progetti
+# restano solo le scelte.
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        description: 'Nome app (es. Kagami) — usato per il nome dell artifact e per la notifica Telegram'
+        required: true
+        type: string
+      platform:
+        description: 'android = APK/AAB per il telefono | linux = bundle desktop ARM64 (utile per provare la UI senza telefono)'
+        required: false
+        default: 'android'
+        type: string
+      artifact:
+        description: 'Solo per platform=android: apk (sideload) | aab (Play Store)'
+        required: false
+        default: 'apk'
+        type: string
+      build_mode:
+        description: 'debug | profile | release. Il release Flutter è AOT + tree-shaking: è quello che va sul telefono.'
+        required: false
+        default: 'release'
+        type: string
+      target_platform:
+        description: >-
+          ABI Android da compilare, separate da virgola (es. android-arm64,android-arm).
+          Vuoto = tutte quelle di default di Flutter. Un telefono moderno è android-arm64:
+          limitarsi a quella dimezza il peso dell APK e il tempo di compilazione AOT.
+        required: false
+        default: 'android-arm64'
+        type: string
+      split_per_abi:
+        description: 'Un APK per ABI invece di uno universale. Ha senso solo con più ABI in target_platform.'
+        required: false
+        default: false
+        type: boolean
+      build_name:
+        description: 'Sovrascrive il versionName (default: quello di pubspec.yaml)'
+        required: false
+        default: ''
+        type: string
+      build_number:
+        description: 'Sovrascrive il versionCode (default: quello di pubspec.yaml)'
+        required: false
+        default: ''
+        type: string
+      dart_defines:
+        description: '--dart-define aggiuntivi, separati da spazio (es. "API=prod FLAG=true"). Vuoto = nessuno.'
+        required: false
+        default: ''
+        type: string
+      run_build_runner:
+        description: >-
+          Esegue `dart run build_runner build --delete-conflicting-outputs` prima della build.
+          Serve ai progetti con codice generato (drift, json_serializable, …) che NON committano
+          i `.g.dart`. Chi li committa lo lascia spento: rigenerarli in CI produrrebbe solo
+          differenze non committate.
+        required: false
+        default: false
+        type: boolean
+      run_analyze:
+        description: 'Esegue `flutter analyze` prima di compilare. Una segnalazione ferma la build.'
+        required: false
+        default: true
+        type: boolean
+      run_tests:
+        description: 'Esegue `flutter test` prima di compilare. Un test rosso ferma la build.'
+        required: false
+        default: true
+        type: boolean
+      clear_cache:
+        description: 'Svuota build/, .dart_tool/ e la cache Gradle del progetto prima di compilare.'
+        required: false
+        default: false
+        type: boolean
+      has_submodules:
+        description: 'true → checkout con submodules: recursive'
+        required: false
+        default: false
+        type: boolean
+      ref:
+        description: 'Ref/SHA da checkoutare. Vuoto = github.sha del run. Serve quando un job precedente ha committato nello stesso run.'
+        required: false
+        default: ''
+        type: string
+      prepare_command:
+        description: 'Comando opzionale eseguito dopo `flutter pub get` e prima della build. Ha GITHUB_TOKEN disponibile.'
+        required: false
+        default: ''
+        type: string
+      flutter_sdk:
+        description: >-
+          Percorso dell SDK Flutter sul runner. ⚠️ Non si scarica l SDK in CI: su questa
+          macchina ARM64 la tarball ufficiale (solo x86-64) muore sotto QEMU, quindi l SDK
+          è un clone git già presente. Vedi README.
+        required: false
+        default: '/home/ubuntu/sdk/flutter'
+        type: string
+      android_sdk:
+        description: 'ANDROID_HOME del runner. È condiviso con altri servizi della macchina: il workflow non ci installa niente.'
+        required: false
+        default: '/opt/android-sdk'
+        type: string
+      java_home:
+        description: 'JDK usato da Gradle.'
+        required: false
+        default: '/usr/lib/jvm/java-17-openjdk-arm64'
+        type: string
+      artifact_retention_days:
+        description: 'Giorni di conservazione dell artifact del run.'
+        required: false
+        default: 7
+        type: number
+      telegram_topic_id:
+        description: 'Topic del supergruppo Telegram (message_thread_id). Vuoto = topic General.'
+        required: false
+        default: ''
+        type: string
+    secrets:
+      TELEGRAM_BOT_TOKEN:
+        required: false
+      TELEGRAM_CHAT_ID:
+        required: false
+      # PAT read-only Contents per submodule privati cross-repo: il GITHUB_TOKEN di
+      # default è scoped al solo repo in build. Se assente → github.token.
+      SUBMODULES_TOKEN:
+        required: false
+
+jobs:
+  build:
+    name: ${{ inputs.app_name }} · ${{ inputs.platform }} ${{ inputs.build_mode }}
+    runs-on: [self-hosted, nexus-core]
+    env:
+      ANDROID_HOME: ${{ inputs.android_sdk }}
+      ANDROID_SDK_ROOT: ${{ inputs.android_sdk }}
+      JAVA_HOME: ${{ inputs.java_home }}
+      # Flutter scrive qui le sue preferenze: senza, sul runner userebbe $HOME e
+      # due job concorrenti si contenderebbero lo stesso file.
+      PUB_CACHE: /home/ubuntu/.pub-cache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: ${{ inputs.has_submodules && 'recursive' || 'false' }}
+          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
+
+      # L'SDK non si scarica: si verifica che ci sia e lo si mette in PATH per
+      # tutti gli step successivi. Se manca, il job deve dirlo subito e chiaro,
+      # non fallire fra venti minuti su un comando non trovato.
+      - name: Resolve Flutter SDK
+        env:
+          FLUTTER_SDK: ${{ inputs.flutter_sdk }}
+        run: |
+          set -euo pipefail
+          if [ ! -x "$FLUTTER_SDK/bin/flutter" ]; then
+            echo "ERROR: nessun SDK Flutter eseguibile in $FLUTTER_SDK/bin/flutter."
+            echo "Il runner deve avere un clone git dell SDK (la tarball ufficiale è solo x86-64)."
+            exit 1
+          fi
+          echo "$FLUTTER_SDK/bin" >> "$GITHUB_PATH"
+
+      - name: Flutter doctor
+        run: |
+          flutter --version
+          flutter doctor -v || true
+
+      - name: Clear caches
+        if: ${{ inputs.clear_cache == true }}
+        run: |
+          set -euo pipefail
+          rm -rf build .dart_tool android/.gradle android/app/build android/build
+          echo "Cache di progetto svuotate (clear_cache=true)."
+
+      # `flutter pub get`, mai `dart pub get`: in un progetto Flutter il secondo
+      # risolve senza le dipendenze dell SDK e lascia un lockfile incoerente.
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Prepare project artifacts
+        if: ${{ inputs.prepare_command != '' }}
+        env:
+          PREPARE_COMMAND: ${{ inputs.prepare_command }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash -euo pipefail -c "$PREPARE_COMMAND"
+
+      - name: Generate code (build_runner)
+        if: ${{ inputs.run_build_runner == true }}
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Analyze
+        if: ${{ inputs.run_analyze == true }}
+        run: flutter analyze
+
+      - name: Test
+        if: ${{ inputs.run_tests == true }}
+        run: flutter test
+
+      - name: Build
+        id: build
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          ARTIFACT: ${{ inputs.artifact }}
+          BUILD_MODE: ${{ inputs.build_mode }}
+          TARGET_PLATFORM: ${{ inputs.target_platform }}
+          SPLIT_PER_ABI: ${{ inputs.split_per_abi }}
+          BUILD_NAME: ${{ inputs.build_name }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          DART_DEFINES: ${{ inputs.dart_defines }}
+        run: |
+          set -euo pipefail
+          # Ogni condizione è un `if` e non un `a && b`: con `set -e` una condizione
+          # falsa in coda allo script farebbe uscire il job con exit 1.
+          ARGS=("--${BUILD_MODE}")
+          if [ -n "$BUILD_NAME" ]; then ARGS+=("--build-name=$BUILD_NAME"); fi
+          if [ -n "$BUILD_NUMBER" ]; then ARGS+=("--build-number=$BUILD_NUMBER"); fi
+          for d in $DART_DEFINES; do ARGS+=("--dart-define=$d"); done
+
+          if [ "$PLATFORM" = "linux" ]; then
+            flutter build linux "${ARGS[@]}"
+          else
+            if [ -n "$TARGET_PLATFORM" ]; then ARGS+=("--target-platform=$TARGET_PLATFORM"); fi
+            if [ "$ARTIFACT" = "aab" ]; then
+              flutter build appbundle "${ARGS[@]}"
+            else
+              if [ "$SPLIT_PER_ABI" = "true" ]; then ARGS+=("--split-per-abi"); fi
+              flutter build apk "${ARGS[@]}"
+            fi
+          fi
+
+      # Il percorso dell'output dipende da piattaforma e formato: lo si risolve una
+      # volta sola qui, così gli step di upload e di invio non lo ricalcolano.
+      - name: Locate build output
+        id: output
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          ARTIFACT: ${{ inputs.artifact }}
+          BUILD_MODE: ${{ inputs.build_mode }}
+          APP_NAME: ${{ inputs.app_name }}
+        run: |
+          set -euo pipefail
+          if [ "$PLATFORM" = "linux" ]; then
+            BUNDLE=$(find build/linux -maxdepth 3 -type d -name bundle | head -1)
+            if [ -z "$BUNDLE" ]; then echo "ERROR: bundle Linux non trovato."; exit 1; fi
+            # Un bundle è una cartella: per mandarlo su Telegram serve un file solo.
+            TARBALL="$RUNNER_TEMP/${APP_NAME}-linux-${BUILD_MODE}.tar.gz"
+            tar -czf "$TARBALL" -C "$(dirname "$BUNDLE")" "$(basename "$BUNDLE")"
+            echo "path=$TARBALL" >> "$GITHUB_OUTPUT"
+            echo "upload=$BUNDLE" >> "$GITHUB_OUTPUT"
+            FILE="$TARBALL"
+          elif [ "$ARTIFACT" = "aab" ]; then
+            FILE=$(find build/app/outputs/bundle -name '*.aab' | head -1)
+            if [ -z "$FILE" ]; then echo "ERROR: nessun .aab prodotto."; exit 1; fi
+            echo "path=$FILE" >> "$GITHUB_OUTPUT"
+            echo "upload=build/app/outputs/bundle/**/*.aab" >> "$GITHUB_OUTPUT"
+          else
+            FILE=$(find build/app/outputs/flutter-apk -name '*.apk' ! -name '*.apk.sha1' | sort | head -1)
+            if [ -z "$FILE" ]; then echo "ERROR: nessun .apk prodotto."; exit 1; fi
+            echo "path=$FILE" >> "$GITHUB_OUTPUT"
+            echo "upload=build/app/outputs/flutter-apk/*.apk" >> "$GITHUB_OUTPUT"
+          fi
+          ls -lh "$(dirname "$FILE")" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app_name }}-${{ inputs.platform }}-${{ inputs.build_mode }}-${{ github.sha }}
+          path: ${{ steps.output.outputs.upload }}
+          retention-days: ${{ inputs.artifact_retention_days }}
+
+      # Best-effort: un problema di rete o di Telegram non deve marcare rosso un job
+      # in cui l'artefatto è stato compilato e già caricato.
+      - name: Send artifact via Telegram
+        if: ${{ always() && steps.output.outputs.path != '' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID: ${{ inputs.telegram_topic_id }}
+          APP_NAME: ${{ inputs.app_name }}
+          BUILD_MODE: ${{ inputs.build_mode }}
+          PLATFORM: ${{ inputs.platform }}
+          FILE: ${{ steps.output.outputs.path }}
+        run: |
+          if [ ! -f "$FILE" ] || [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Skip notifica Telegram (artefatto non trovato o token/chat mancante)"
+            exit 0
+          fi
+          EXT="${FILE##*.}"
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          LINE1="✅ ${APP_NAME} \`${PLATFORM} ${BUILD_MODE}\` ${EXT^^} — \`${SHORT_SHA}\`"
+          LINE2="Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          CAPTION="${LINE1}"$'\n'"${LINE2}"
+
+          BYTES=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+          MB=$(( BYTES / 1024 / 1024 ))
+          echo "Artefatto: ${FILE} (${MB} MB)"
+
+          # La Bot API cloud si ferma a 50 MB. Il Local Bot API Server su nexus-core
+          # (telegram-bot-api --local, porta 8081) arriva a ~2 GB: si rileva a runtime
+          # con getMe e, se non risponde, si torna al cloud.
+          # Il topic va passato come campo a parte: message_thread_id vuoto viene
+          # rifiutato dalla Bot API, quindi l'argomento esiste solo se valorizzato.
+          TG_THREAD=()
+          [ -n "${TELEGRAM_TOPIC_ID}" ] && TG_THREAD=(-F "message_thread_id=${TELEGRAM_TOPIC_ID}")
+
+          TG_LOCAL="${TELEGRAM_API_BASE:-http://localhost:8081}"
+          if curl -sf -m 5 "${TG_LOCAL}/bot${TELEGRAM_BOT_TOKEN}/getMe" -o /dev/null 2>/dev/null; then
+            TG_API="${TG_LOCAL}/bot${TELEGRAM_BOT_TOKEN}"
+            MAX_BYTES=2097152000
+            MAX_LABEL="2 GB (Local Bot API Server)"
+            echo "Local Bot API Server attivo su ${TG_LOCAL} → invio diretto fino a 2 GB."
+          else
+            TG_API="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}"
+            MAX_BYTES=52428800
+            MAX_LABEL="50 MB (Bot API cloud)"
+            echo "Local Bot API Server non raggiungibile → uso il cloud (limite 50 MB)."
+          fi
+
+          if [ "${BYTES}" -gt 0 ] && [ "${BYTES}" -le "${MAX_BYTES}" ]; then
+            HTTP_CODE=$(curl -s -o /tmp/tg_resp.json -w "%{http_code}" \
+              -F "chat_id=${TELEGRAM_CHAT_ID}" "${TG_THREAD[@]}" \
+              -F "document=@${FILE}" \
+              -F "caption=${CAPTION}" \
+              "${TG_API}/sendDocument" || echo "000")
+          else
+            echo "Artefatto ${MB} MB oltre il limite ${MAX_LABEL}: invio solo il link al run."
+            CAPTION="${CAPTION}"$'\n'"⚠️ ${MB} MB: oltre il limite (${MAX_LABEL}), scaricalo dagli artifact del run."
+            HTTP_CODE=$(curl -s -o /tmp/tg_resp.json -w "%{http_code}" \
+              -F "chat_id=${TELEGRAM_CHAT_ID}" "${TG_THREAD[@]}" \
+              -F "text=${CAPTION}" \
+              -F "parse_mode=Markdown" \
+              "${TG_API}/sendMessage" || echo "000")
+          fi
+          if [ "${HTTP_CODE}" = "200" ]; then
+            echo "Notifica Telegram inviata (HTTP ${HTTP_CODE})."
+          else
+            echo "warn: invio Telegram fallito (HTTP ${HTTP_CODE}); la build resta valida, l artefatto è negli artifact del run."
+            cat /tmp/tg_resp.json 2>/dev/null || true; echo ""
+          fi

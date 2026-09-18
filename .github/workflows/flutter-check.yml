@@ -1,0 +1,139 @@
+name: Flutter Check (reusable)
+
+# Verifica di qualità senza artefatti: formattazione, analisi statica, test e —
+# per i progetti che committano il codice generato — controllo che i `.g.dart`
+# committati siano ancora quelli che build_runner produrrebbe oggi.
+# Chiamato via:
+#   uses: GabryXnLab/flutter-ci/.github/workflows/flutter-check.yml@main
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        description: 'Nome app — compare nel nome del job e nella notifica'
+        required: true
+        type: string
+      run_format:
+        description: 'Esegue `dart format --set-exit-if-changed` sul sorgente.'
+        required: false
+        default: true
+        type: boolean
+      run_analyze:
+        description: 'Esegue `flutter analyze`.'
+        required: false
+        default: true
+        type: boolean
+      run_tests:
+        description: 'Esegue `flutter test`.'
+        required: false
+        default: true
+        type: boolean
+      verify_generated:
+        description: >-
+          Rigenera con build_runner e fallisce se il risultato differisce da ciò che è
+          committato. È il controllo che manca ai progetti che tengono i `.g.dart` in
+          git: uno schema modificato senza rigenerare compila lo stesso, e si scopre
+          solo a runtime.
+        required: false
+        default: false
+        type: boolean
+      has_submodules:
+        required: false
+        default: false
+        type: boolean
+      ref:
+        required: false
+        default: ''
+        type: string
+      flutter_sdk:
+        description: 'Percorso dell SDK Flutter sul runner (clone git: la tarball ufficiale è solo x86-64).'
+        required: false
+        default: '/home/ubuntu/sdk/flutter'
+        type: string
+      telegram_topic_id:
+        description: 'Topic Telegram per il riepilogo. Vuoto = nessuna notifica (il risultato si legge nel run).'
+        required: false
+        default: ''
+        type: string
+    secrets:
+      TELEGRAM_BOT_TOKEN:
+        required: false
+      TELEGRAM_CHAT_ID:
+        required: false
+      SUBMODULES_TOKEN:
+        required: false
+
+jobs:
+  check:
+    name: ${{ inputs.app_name }} · verifica
+    runs-on: [self-hosted, nexus-core]
+    env:
+      PUB_CACHE: /home/ubuntu/.pub-cache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: ${{ inputs.has_submodules && 'recursive' || 'false' }}
+          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
+
+      - name: Resolve Flutter SDK
+        env:
+          FLUTTER_SDK: ${{ inputs.flutter_sdk }}
+        run: |
+          set -euo pipefail
+          if [ ! -x "$FLUTTER_SDK/bin/flutter" ]; then
+            echo "ERROR: nessun SDK Flutter eseguibile in $FLUTTER_SDK/bin/flutter."
+            exit 1
+          fi
+          echo "$FLUTTER_SDK/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        run: |
+          flutter --version
+          flutter pub get
+
+      - name: Format
+        if: ${{ inputs.run_format == true }}
+        run: dart format --set-exit-if-changed lib test
+
+      - name: Analyze
+        if: ${{ inputs.run_analyze == true }}
+        run: flutter analyze
+
+      - name: Test
+        if: ${{ inputs.run_tests == true }}
+        run: flutter test
+
+      # Si rigenera e si confronta con git: se il generato committato è vecchio, il
+      # diff lo dice per nome di file invece di lasciarlo scoprire in esecuzione.
+      - name: Verify generated code
+        if: ${{ inputs.verify_generated == true }}
+        run: |
+          set -euo pipefail
+          dart run build_runner build --delete-conflicting-outputs
+          if ! git diff --exit-code -- '*.g.dart'; then
+            echo "ERROR: il codice generato committato non corrisponde al sorgente."
+            echo "Esegui 'dart run build_runner build --delete-conflicting-outputs' e committa il risultato."
+            exit 1
+          fi
+          echo "Codice generato allineato."
+
+      - name: Notify result via Telegram
+        if: ${{ always() && inputs.telegram_topic_id != '' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID: ${{ inputs.telegram_topic_id }}
+          APP_NAME: ${{ inputs.app_name }}
+          RESULT: ${{ job.status }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Skip notifica Telegram (token/chat mancante)"; exit 0
+          fi
+          ICON="✅"; [ "$RESULT" != "success" ] && ICON="❌"
+          TEXT="${ICON} ${APP_NAME} verifica: \`${RESULT}\` — \`${GITHUB_SHA:0:7}\`"$'\n'"Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          TG_THREAD=()
+          [ -n "${TELEGRAM_TOPIC_ID}" ] && TG_THREAD=(-F "message_thread_id=${TELEGRAM_TOPIC_ID}")
+          curl -s -o /dev/null -F "chat_id=${TELEGRAM_CHAT_ID}" "${TG_THREAD[@]}" \
+            -F "text=${TEXT}" -F "parse_mode=Markdown" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" || true

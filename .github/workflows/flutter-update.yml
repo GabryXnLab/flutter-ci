@@ -1,0 +1,239 @@
+name: Flutter Update (reusable)
+
+# Aggiornamento delle dipendenze di un progetto Flutter, con verifica e commit.
+# Chiamato via:
+#   uses: GabryXnLab/flutter-ci/.github/workflows/flutter-update.yml@main
+#
+# ⚠️ Non è l'equivalente dell'OTA di Expo: in Flutter il codice Dart è compilato AOT
+# dentro l'APK, quindi non esiste un aggiornamento che non passi da una nuova build.
+# L'unica cosa che si aggiorna "a caldo" in un progetto Flutter sono le dipendenze:
+# questo workflow le alza, controlla che il progetto regga (generato, analisi, test)
+# e committa il lockfile. L'APK aggiornato lo produce poi il workflow di build.
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        description: 'Nome app — compare nel nome del job, nel commit e nella notifica'
+        required: true
+        type: string
+      packages:
+        description: >-
+          Pacchetti da aggiornare, separati da spazio. Vuoto = tutti quelli che i vincoli
+          di pubspec.yaml permettono.
+        required: false
+        default: ''
+        type: string
+      major_versions:
+        description: >-
+          Alza anche i vincoli di pubspec.yaml alle major successive (`--major-versions`).
+          È un cambio di API potenziale: lasciarlo spento per l aggiornamento di routine.
+        required: false
+        default: false
+        type: boolean
+      upgrade_sdk:
+        description: >-
+          Aggiorna prima l SDK Flutter sul runner (`git pull` nel clone + `flutter upgrade`).
+          ⚠️ L SDK è condiviso da tutti i progetti di questa macchina: un aggiornamento qui
+          si ripercuote su tutti, quindi è spento di default e va chiesto apposta.
+        required: false
+        default: false
+        type: boolean
+      run_build_runner:
+        description: 'Rigenera il codice (drift, json_serializable, …) dopo l aggiornamento e lo committa insieme al lockfile.'
+        required: false
+        default: false
+        type: boolean
+      run_analyze:
+        description: 'Esegue `flutter analyze` dopo l aggiornamento. Una segnalazione blocca il commit.'
+        required: false
+        default: true
+        type: boolean
+      run_tests:
+        description: 'Esegue `flutter test` dopo l aggiornamento. Un test rosso blocca il commit.'
+        required: false
+        default: true
+        type: boolean
+      commit:
+        description: >-
+          Committa e pusha il risultato sul branch del run. Spento = si vede solo il
+          riepilogo (prova a secco: cosa succederebbe aggiornando).
+        required: false
+        default: true
+        type: boolean
+      has_submodules:
+        required: false
+        default: false
+        type: boolean
+      flutter_sdk:
+        description: 'Percorso dell SDK Flutter sul runner (clone git: la tarball ufficiale è solo x86-64).'
+        required: false
+        default: '/home/ubuntu/sdk/flutter'
+        type: string
+      telegram_topic_id:
+        description: 'Topic Telegram per il riepilogo. Vuoto = nessuna notifica.'
+        required: false
+        default: ''
+        type: string
+    secrets:
+      TELEGRAM_BOT_TOKEN:
+        required: false
+      TELEGRAM_CHAT_ID:
+        required: false
+      SUBMODULES_TOKEN:
+        required: false
+
+jobs:
+  update:
+    name: ${{ inputs.app_name }} · aggiorna dipendenze
+    runs-on: [self-hosted, nexus-core]
+    permissions:
+      contents: write
+    env:
+      PUB_CACHE: /home/ubuntu/.pub-cache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: ${{ inputs.has_submodules && 'recursive' || 'false' }}
+          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
+
+      - name: Resolve Flutter SDK
+        env:
+          FLUTTER_SDK: ${{ inputs.flutter_sdk }}
+        run: |
+          set -euo pipefail
+          if [ ! -x "$FLUTTER_SDK/bin/flutter" ]; then
+            echo "ERROR: nessun SDK Flutter eseguibile in $FLUTTER_SDK/bin/flutter."
+            exit 1
+          fi
+          echo "$FLUTTER_SDK/bin" >> "$GITHUB_PATH"
+
+      # L'SDK è un clone git condiviso: si aggiorna con git, non con la tarball.
+      - name: Upgrade Flutter SDK
+        if: ${{ inputs.upgrade_sdk == true }}
+        env:
+          FLUTTER_SDK: ${{ inputs.flutter_sdk }}
+        run: |
+          set -euo pipefail
+          git -C "$FLUTTER_SDK" pull --ff-only
+          flutter precache --android --linux
+          flutter --version
+
+      - name: Snapshot delle versioni attuali
+        run: |
+          set -euo pipefail
+          flutter --version
+          flutter pub get
+          cp pubspec.lock "$RUNNER_TEMP/pubspec.lock.before"
+
+      - name: Upgrade
+        env:
+          PACKAGES: ${{ inputs.packages }}
+          MAJOR: ${{ inputs.major_versions }}
+        run: |
+          set -euo pipefail
+          ARGS=()
+          if [ "$MAJOR" = "true" ]; then ARGS+=("--major-versions"); fi
+          for p in $PACKAGES; do ARGS+=("$p"); done
+          flutter pub upgrade "${ARGS[@]}"
+
+      - name: Generate code (build_runner)
+        if: ${{ inputs.run_build_runner == true }}
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Analyze
+        if: ${{ inputs.run_analyze == true }}
+        run: flutter analyze
+
+      - name: Test
+        if: ${{ inputs.run_tests == true }}
+        run: flutter test
+
+      # Il riepilogo si ricava dal lockfile prima/dopo: è l'unico posto dove la
+      # versione risolta di ogni pacchetto è scritta per esteso.
+      - name: Riepilogo delle differenze
+        id: diff
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/pubspec.lock.before" pubspec.lock > "$RUNNER_TEMP/summary.txt" <<'PY'
+          import re, sys
+
+          def versions(path):
+              out, name = {}, None
+              for line in open(path):
+                  m = re.match(r'^  (\S+):\s*$', line)
+                  if m:
+                      name = m.group(1)
+                  m = re.match(r'^    version: "(.+)"\s*$', line)
+                  if m and name:
+                      out[name] = m.group(1)
+              return out
+
+          before, after = versions(sys.argv[1]), versions(sys.argv[2])
+          for name in sorted(set(before) | set(after)):
+              b, a = before.get(name), after.get(name)
+              if b == a:
+                  continue
+              if b is None:
+                  print(f"+ {name} {a}")
+              elif a is None:
+                  print(f"- {name} {b}")
+              else:
+                  print(f"↑ {name} {b} → {a}")
+          PY
+          if [ -s "$RUNNER_TEMP/summary.txt" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Nessuna dipendenza aggiornata." > "$RUNNER_TEMP/summary.txt"
+          fi
+          {
+            echo '## Dipendenze'
+            echo '```'
+            cat "$RUNNER_TEMP/summary.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/summary.txt"
+
+      - name: Commit & push
+        if: ${{ inputs.commit == true && steps.diff.outputs.changed == 'true' }}
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "Il lockfile è cambiato ma git non vede differenze: niente da committare."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -F - <<EOF
+          build(deps): aggiorna le dipendenze di ${APP_NAME}
+
+          $(cat "$RUNNER_TEMP/summary.txt")
+
+          Prodotto dal workflow di aggiornamento (flutter-ci/flutter-update.yml).
+          EOF
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Notify via Telegram
+        if: ${{ always() && inputs.telegram_topic_id != '' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID: ${{ inputs.telegram_topic_id }}
+          APP_NAME: ${{ inputs.app_name }}
+          RESULT: ${{ job.status }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Skip notifica Telegram (token/chat mancante)"; exit 0
+          fi
+          ICON="✅"; [ "$RESULT" != "success" ] && ICON="❌"
+          BODY=$(head -c 2000 "$RUNNER_TEMP/summary.txt" 2>/dev/null || echo "nessun riepilogo")
+          TEXT="${ICON} ${APP_NAME} dipendenze: \`${RESULT}\`"$'\n'"\`\`\`"$'\n'"${BODY}"$'\n'"\`\`\`"$'\n'"Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          TG_THREAD=()
+          [ -n "${TELEGRAM_TOPIC_ID}" ] && TG_THREAD=(-F "message_thread_id=${TELEGRAM_TOPIC_ID}")
+          curl -s -o /dev/null -F "chat_id=${TELEGRAM_CHAT_ID}" "${TG_THREAD[@]}" \
+            -F "text=${TEXT}" -F "parse_mode=Markdown" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" || true

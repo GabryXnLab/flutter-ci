@@ -54,6 +54,7 @@ workflow lo verificano e si fermano subito se manca.
 | SDK Android | `/opt/android-sdk` | **Condiviso con altri servizi della macchina.** I workflow non ci installano né rimuovono pacchetti. |
 | JDK 17 | `/usr/lib/jvm/java-17-openjdk-arm64` | Gradle gira sulla JVM di sistema. |
 | Pub cache | `/home/ubuntu/.pub-cache` | Condivisa fra i run: è ciò che rende `flutter pub get` quasi istantaneo. |
+| QEMU 10 x86-64 | `/home/ubuntu/qemu-x86_64-10/bin/qemu-x86_64` | Serve all'AOT Android: Flutter non pubblica `gen_snapshot` per host linux-arm64 e quello x86-64 sotto il QEMU di sistema (8.2) va in SIGSEGV. È l'unico che il workflow **installa da sé** se manca, sotto `$HOME` e senza sudo. |
 
 Tutti e tre i percorsi sono input con quel default: un runner diverso li sovrascrive
 senza toccare questo repo.

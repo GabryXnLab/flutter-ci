@@ -136,7 +136,7 @@ on:
         default: 7
         type: number
       telegram_topic_id:
-        description: 'Topic del supergruppo Telegram (message_thread_id). Vuoto = topic General.'
+        description: 'Topic del supergruppo Telegram (message_thread_id). Vuoto = nessuna notifica.'
         required: false
         default: ''
         type: string

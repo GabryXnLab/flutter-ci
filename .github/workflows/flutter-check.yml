@@ -122,6 +122,7 @@ jobs:
         if: ${{ always() && inputs.telegram_topic_id != '' }}
         uses: GabryXnLab/ci-bot/notify@main
         with:
+          run_inputs: ${{ toJSON(github.event.inputs) }}
           bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
           topic_id: ${{ inputs.telegram_topic_id }}

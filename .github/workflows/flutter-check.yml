@@ -120,20 +120,10 @@ jobs:
 
       - name: Notify result via Telegram
         if: ${{ always() && inputs.telegram_topic_id != '' }}
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_TOPIC_ID: ${{ inputs.telegram_topic_id }}
-          APP_NAME: ${{ inputs.app_name }}
-          RESULT: ${{ job.status }}
-        run: |
-          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "Skip notifica Telegram (token/chat mancante)"; exit 0
-          fi
-          ICON="✅"; [ "$RESULT" != "success" ] && ICON="❌"
-          TEXT="${ICON} ${APP_NAME} verifica: \`${RESULT}\` — \`${GITHUB_SHA:0:7}\`"$'\n'"Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          TG_THREAD=()
-          [ -n "${TELEGRAM_TOPIC_ID}" ] && TG_THREAD=(-F "message_thread_id=${TELEGRAM_TOPIC_ID}")
-          curl -s -o /dev/null -F "chat_id=${TELEGRAM_CHAT_ID}" "${TG_THREAD[@]}" \
-            -F "text=${TEXT}" -F "parse_mode=Markdown" \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" || true
+        uses: GabryXnLab/ci-bot/notify@main
+        with:
+          bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          topic_id: ${{ inputs.telegram_topic_id }}
+          status: ${{ job.status }}
+          title: ${{ inputs.app_name }} verifica

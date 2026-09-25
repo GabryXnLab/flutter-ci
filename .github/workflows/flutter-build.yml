@@ -352,72 +352,15 @@ jobs:
           path: ${{ steps.output.outputs.upload }}
           retention-days: ${{ inputs.artifact_retention_days }}
 
-      # Best-effort: un problema di rete o di Telegram non deve marcare rosso un job
-      # in cui l'artefatto è stato compilato e già caricato.
-      - name: Send artifact via Telegram
-        if: ${{ always() && steps.output.outputs.path != '' }}
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_TOPIC_ID: ${{ inputs.telegram_topic_id }}
-          APP_NAME: ${{ inputs.app_name }}
-          BUILD_MODE: ${{ inputs.build_mode }}
-          PLATFORM: ${{ inputs.platform }}
-          FILE: ${{ steps.output.outputs.path }}
-        run: |
-          if [ ! -f "$FILE" ] || [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "Skip notifica Telegram (artefatto non trovato o token/chat mancante)"
-            exit 0
-          fi
-          EXT="${FILE##*.}"
-          SHORT_SHA="${GITHUB_SHA:0:7}"
-          LINE1="✅ ${APP_NAME} \`${PLATFORM} ${BUILD_MODE}\` ${EXT^^} — \`${SHORT_SHA}\`"
-          LINE2="Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          CAPTION="${LINE1}"$'\n'"${LINE2}"
-
-          BYTES=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
-          MB=$(( BYTES / 1024 / 1024 ))
-          echo "Artefatto: ${FILE} (${MB} MB)"
-
-          # La Bot API cloud si ferma a 50 MB. Il Local Bot API Server su nexus-core
-          # (telegram-bot-api --local, porta 8081) arriva a ~2 GB: si rileva a runtime
-          # con getMe e, se non risponde, si torna al cloud.
-          # Il topic va passato come campo a parte: message_thread_id vuoto viene
-          # rifiutato dalla Bot API, quindi l'argomento esiste solo se valorizzato.
-          TG_THREAD=()
-          [ -n "${TELEGRAM_TOPIC_ID}" ] && TG_THREAD=(-F "message_thread_id=${TELEGRAM_TOPIC_ID}")
-
-          TG_LOCAL="${TELEGRAM_API_BASE:-http://localhost:8081}"
-          if curl -sf -m 5 "${TG_LOCAL}/bot${TELEGRAM_BOT_TOKEN}/getMe" -o /dev/null 2>/dev/null; then
-            TG_API="${TG_LOCAL}/bot${TELEGRAM_BOT_TOKEN}"
-            MAX_BYTES=2097152000
-            MAX_LABEL="2 GB (Local Bot API Server)"
-            echo "Local Bot API Server attivo su ${TG_LOCAL} → invio diretto fino a 2 GB."
-          else
-            TG_API="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}"
-            MAX_BYTES=52428800
-            MAX_LABEL="50 MB (Bot API cloud)"
-            echo "Local Bot API Server non raggiungibile → uso il cloud (limite 50 MB)."
-          fi
-
-          if [ "${BYTES}" -gt 0 ] && [ "${BYTES}" -le "${MAX_BYTES}" ]; then
-            HTTP_CODE=$(curl -s -o /tmp/tg_resp.json -w "%{http_code}" \
-              -F "chat_id=${TELEGRAM_CHAT_ID}" "${TG_THREAD[@]}" \
-              -F "document=@${FILE}" \
-              -F "caption=${CAPTION}" \
-              "${TG_API}/sendDocument" || echo "000")
-          else
-            echo "Artefatto ${MB} MB oltre il limite ${MAX_LABEL}: invio solo il link al run."
-            CAPTION="${CAPTION}"$'\n'"⚠️ ${MB} MB: oltre il limite (${MAX_LABEL}), scaricalo dagli artifact del run."
-            HTTP_CODE=$(curl -s -o /tmp/tg_resp.json -w "%{http_code}" \
-              -F "chat_id=${TELEGRAM_CHAT_ID}" "${TG_THREAD[@]}" \
-              -F "text=${CAPTION}" \
-              -F "parse_mode=Markdown" \
-              "${TG_API}/sendMessage" || echo "000")
-          fi
-          if [ "${HTTP_CODE}" = "200" ]; then
-            echo "Notifica Telegram inviata (HTTP ${HTTP_CODE})."
-          else
-            echo "warn: invio Telegram fallito (HTTP ${HTTP_CODE}); la build resta valida, l artefatto è negli artifact del run."
-            cat /tmp/tg_resp.json 2>/dev/null || true; echo ""
-          fi
+      # Esito sempre (azione e bot in GabryXnLab/ci-bot): l'artefatto se il job riesce,
+      # altrimenti il pulsante per rilanciare il run. Best-effort.
+      - name: Notify via Telegram
+        if: ${{ always() }}
+        uses: GabryXnLab/ci-bot/notify@main
+        with:
+          bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          topic_id: ${{ inputs.telegram_topic_id }}
+          status: ${{ job.status }}
+          title: ${{ inputs.app_name }} ${{ inputs.platform }} ${{ inputs.build_mode }}
+          files: ${{ steps.output.outputs.path }}

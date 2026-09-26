@@ -188,8 +188,15 @@ jobs:
           topic_id: ${{ inputs.telegram_topic_id }}
           status: started
           title: ${{ inputs.app_name }} ${{ inputs.platform }} ${{ inputs.build_mode }}
+      # Sul self-hosted il checkout non pulisce: `git clean -ffdx` toglieva build/,
+      # .dart_tool/, android/.gradle e android/.kotlin, e ogni run ricompilava da zero
+      # Kotlin e Java di tutti i plugin, il nativo e R8 (su Kagami ~5 minuti dopo la
+      # compilazione Dart). Tenerli rende Gradle incrementale: riusa un risultato solo
+      # se gli input sono identici, quindi l APK non cambia. `clear_cache` resta la via
+      # per ripartire puliti. Un runner GitHub è comunque nuovo a ogni job.
       - uses: actions/checkout@v4
         with:
+          clean: ${{ inputs.runner == 'github' }}
           ref: ${{ inputs.ref }}
           submodules: ${{ inputs.has_submodules && 'recursive' || 'false' }}
           token: ${{ secrets.SUBMODULES_TOKEN || github.token }}

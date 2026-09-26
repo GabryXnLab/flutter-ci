@@ -66,6 +66,13 @@ gh workflow list --repo GabryXnLab/<progetto>   # i wrapper che chiamano questi 
   gen_snapshot per host ARM64* mette un wrapper dove Flutter cerca l'eseguibile e, se il
   QEMU non c'è, se lo installa. Costo misurato su Kagami: APK release arm64 da 22,4 MB in
   **8m10s** (contro ~70 s di una debug). `debug` non ci passa: è JIT.
+- **Sul self-hosted si va veloci facendo meno lavoro, non usando più risorse.**
+  Il checkout non pulisce (`clean: false`): gli intermedi di Gradle, Kotlin e CMake
+  restano fra i run e la build è incrementale; `clear_cache` riparte da zero. Worker,
+  parallelismo e heap di Gradle invece li decide `~/.gradle/gradle.properties` della
+  macchina (2 worker, niente parallelo, 4 GB, build cache accesa), che prevale su
+  quelli dei progetti ed è tarato così perché nexus-core è condivisa con GitLab e
+  altri servizi: non si alzano da qui.
 - **`/opt/android-sdk` è condiviso con altri servizi della macchina.** I workflow non ci
   installano e non ci rimuovono niente. Attenzione: *Gradle* sì, di suo, quando un
   progetto dichiara un NDK o una platform che non c'è — è il progetto a doverlo

@@ -29,9 +29,13 @@ Scoperte principali:
 
 - **Il tempo della build release di Kagami era per il 60% `gen_snapshot` sotto QEMU**
   (profilo: 545 s, di cui 321 di AOT, 51 di compilazione Dart, ~130 di Gradle quasi tutto
-  dalla build cache). Box64 v0.4.4 fa lo stesso in 45 s con output identico, ma in CI va
-  a volte in crash: il wrapper usa due esecuzioni concordi o ripiega su QEMU. QEMU non
+  dalla build cache). Box64 v0.4.4 fa lo stesso in 46 s con output identico, purché il GC
+  del Dart VM giri a un thread: con i thread paralleli e la CPU contesa (in CI) cadeva in
+  «double free». Il wrapper usa due esecuzioni concordi o ripiega su QEMU. QEMU non
   accelera cambiando modello di CPU (317–328 s).
+- Misure dopo le modifiche: build **completamente pulita** in CI (`clear_cache`, niente
+  intermedi né build cache) 380 s di step Build contro 659–709 s con QEMU; build locale con
+  una modifica al Dart e intermedi presenti: task Gradle **152 s** contro 545.
 - Build di Kagami senza modifiche al Dart dopo `clean: false`: **1m20s** l'intero run
   (Build 41 s), contro i 7–15 minuti di prima.
 - Riftgate: mobile e desktop condividono la cartella di lavoro sul runner, e il `git clean`
@@ -41,8 +45,8 @@ Scoperte principali:
 - `hermesc` di Riftgate con Box64: 43 s contro 95 s del QEMU di binfmt, identico.
 - La macchina non è più condivisa con GitLab (`gitlab-runner` rimosso il 25/09).
 
-Da misurare nelle prossime build normali: il tempo della build Kagami con modifiche al Dart
-(atteso ~3–4 minuti se Box64 concorda), la build mobile di Riftgate a macchina scarica (la
+Da misurare nelle prossime build normali: il tempo in CI della build Kagami con modifiche al
+Dart (atteso ~3–4 minuti di run), la build mobile di Riftgate a macchina scarica (la
 prova del 26/09 era a carico 12–14), la prima build desktop con sccache.
 
 ## Obiettivi della sessione (26/09, pomeriggio)

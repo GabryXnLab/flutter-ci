@@ -94,8 +94,19 @@ on:
         required: false
         default: true
         type: boolean
+      max_workers:
+        description: >-
+          Worker di Gradle (e di CMake) per questo run. auto = sul self-hosted le CPU libere in
+          quel momento, mai sotto 2; su GitHub tutte | 2 | 4. Stesso input, stessi valori e
+          stesso significato in flutter-ci, expo-ci e desktop-ci (GabryXnLab/build-kit).
+        required: false
+        default: 'auto'
+        type: string
       clear_cache:
-        description: 'Svuota build/, .dart_tool/ e la cache Gradle del progetto prima di compilare.'
+        description: >-
+          Svuota build/, .dart_tool/ e gli intermedi Gradle/Kotlin del progetto e, per questo run,
+          non prende risultati dalla build cache. Le cache condivise con gli altri progetti
+          (~/.gradle, pub-cache, ccache) non si cancellano.
         required: false
         default: false
         type: boolean
@@ -122,10 +133,15 @@ on:
         required: false
         default: '/home/ubuntu/sdk/flutter'
         type: string
-      qemu_x86_64:
+      x86_emulator:
         description: >-
-          Binario QEMU usato per eseguire `gen_snapshot` x86-64 su host ARM64 (vedi lo step
-          «Fallback gen_snapshot»). Se manca viene installato sotto $HOME, senza sudo.
+          Come eseguire `gen_snapshot` x86-64 sul runner ARM64 (vedi lo step «gen_snapshot per
+          host ARM64»): box64 (default, ~6 volte più veloce, output identico) | qemu (QEMU 10).
+        required: false
+        default: 'box64'
+        type: string
+      qemu_x86_64:
+        description: 'Non più usato: il percorso di QEMU lo decide GabryXnLab/build-kit (x86-64). Resta per i wrapper che lo passano.'
         required: false
         default: '/home/ubuntu/qemu-x86_64-10/bin/qemu-x86_64'
         type: string
@@ -312,6 +328,15 @@ jobs:
           fi
           echo "$FLUTTER_SDK/bin" >> "$GITHUB_PATH"
 
+      # Worker, cache condivise della macchina e clear_cache di sola esecuzione: il pezzo
+      # comune a tutte le build, in GabryXnLab/build-kit.
+      - name: Tune build
+        uses: GabryXnLab/build-kit/setup@main
+        with:
+          runner: ${{ inputs.runner }}
+          max_workers: ${{ inputs.max_workers }}
+          clear_cache: ${{ inputs.clear_cache }}
+
       - name: Flutter doctor
         run: |
           flutter --version
@@ -325,38 +350,28 @@ jobs:
       #      l'artefatto non esiste a monte. Senza, la build muore con
       #      «Failed to find … /linux-arm64/gen_snapshot».
       #   2. Il binario x86-64 sotto il QEMU di sistema (8.2 di Ubuntu 24.04) muore con
-      #      «QEMU internal SIGSEGV {code=MAPERR, addr=0x20}» — è QEMU a cadere, non Dart,
-      #      e non dipende da reserved_va né dall'ASLR.
-      # Con QEMU 10 la stessa compilazione passa e produce un APK valido, quindi si mette
-      # dove Flutter cerca l'eseguibile un wrapper che invoca il binario x86-64 con quel
-      # QEMU. È tutto sotto $HOME del runner: niente sudo, niente modifiche all'SDK Android
-      # condiviso, e lo step è idempotente.
+      #      «QEMU internal SIGSEGV {code=MAPERR, addr=0x20}»; con QEMU 10 passa.
+      # Dove Flutter cerca l'eseguibile si mette un wrapper che lancia quello x86-64 con un
+      # emulatore utente. Dal 26 settembre è Box64 (traduzione dinamica, libc nativa): su
+      # Kagami 53 s contro i 316 s di QEMU 10, con un app.so identico byte per byte — era il
+      # 60% dell'intera build. L'emulatore lo prepara build-kit; qui solo il wrapper, scritto
+      # con un mv atomico perché l'SDK è condiviso dai runner della macchina.
       # `debug` non ci passa: è JIT e non usa `gen_snapshot`.
-      - name: Fallback gen_snapshot per host ARM64
+      - name: x86-64 emulator for gen_snapshot
+        id: x86
         if: ${{ inputs.runner != 'github' && inputs.platform == 'android' && inputs.build_mode != 'debug' }}
+        uses: GabryXnLab/build-kit/x86-64@main
+        with:
+          emulator: ${{ inputs.x86_emulator }}
+          qemu_deb_url: ${{ inputs.qemu_deb_url }}
+
+      - name: gen_snapshot per host ARM64
+        if: ${{ steps.x86.outputs.launcher != '' }}
         env:
           FLUTTER_SDK: ${{ inputs.flutter_sdk }}
-          QEMU_BIN: ${{ inputs.qemu_x86_64 }}
-          QEMU_DEB_URL: ${{ inputs.qemu_deb_url }}
+          LAUNCHER: ${{ steps.x86.outputs.launcher }}
         run: |
           set -euo pipefail
-          if [ "$(uname -m)" != "aarch64" ]; then
-            echo "Host non ARM64: gen_snapshot nativo, nessun fallback necessario."
-            exit 0
-          fi
-
-          if [ ! -x "$QEMU_BIN" ]; then
-            echo "QEMU non presente in $QEMU_BIN: lo installo sotto \$HOME (niente sudo)."
-            TMP=$(mktemp -d)
-            curl -fsSL -o "$TMP/qemu-user.deb" "$QEMU_DEB_URL"
-            dpkg-deb -x "$TMP/qemu-user.deb" "$TMP/extracted"
-            mkdir -p "$(dirname "$QEMU_BIN")"
-            cp "$TMP/extracted/usr/bin/qemu-x86_64" "$QEMU_BIN"
-            chmod +x "$QEMU_BIN"
-            rm -rf "$TMP"
-          fi
-          "$QEMU_BIN" --version | head -1
-
           ENGINE="$FLUTTER_SDK/bin/cache/artifacts/engine"
           FOUND=0
           for dir in "$ENGINE"/android-*-release "$ENGINE"/android-*-profile; do
@@ -366,24 +381,25 @@ jobs:
             # fa eseguire il binario dal QEMU di sistema, che è quello che va in SIGSEGV.
             if [ -L "$dir/linux-arm64" ]; then rm -f "$dir/linux-arm64"; fi
             mkdir -p "$dir/linux-arm64"
-            cat > "$dir/linux-arm64/gen_snapshot" <<EOF
+            cat > "$dir/linux-arm64/gen_snapshot.new" <<EOF
           #!/bin/sh
-          exec "$QEMU_BIN" "\$(dirname "\$0")/../linux-x64/gen_snapshot" "\$@"
+          exec "$LAUNCHER" "\$(dirname "\$0")/../linux-x64/gen_snapshot" "\$@"
           EOF
-            chmod +x "$dir/linux-arm64/gen_snapshot"
-            echo "Wrapper pronto: $(basename "$dir")/linux-arm64/gen_snapshot"
+            chmod +x "$dir/linux-arm64/gen_snapshot.new"
+            mv "$dir/linux-arm64/gen_snapshot.new" "$dir/linux-arm64/gen_snapshot"
           done
           if [ "$FOUND" = "0" ]; then
             echo "ERROR: in $ENGINE non c'è nessun android-*/linux-x64."
             echo "Scaricalo una volta sul runner con: flutter precache --android --universal"
             exit 1
           fi
+          echo "gen_snapshot x86-64 via $LAUNCHER ($FOUND cartelle dell'engine)"
 
       - name: Clear caches
         if: ${{ inputs.clear_cache == true }}
         run: |
           set -euo pipefail
-          rm -rf build .dart_tool android/.gradle android/app/build android/build
+          rm -rf build .dart_tool android/.gradle android/.kotlin android/app/build android/build
           echo "Cache di progetto svuotate (clear_cache=true)."
 
       # `flutter pub get`, mai `dart pub get`: in un progetto Flutter il secondo

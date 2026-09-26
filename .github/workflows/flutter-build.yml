@@ -422,6 +422,10 @@ jobs:
             fi
             echo "gen_snapshot: Box64 non concorde (uscite $RA e $RB), ripeto con QEMU 10" >&2
             tail -n 3 "$T/a.log" "$T/b.log" >&2 || true
+            D="$HOME/ci/cache/gen_snapshot-diag/$(date +%s)"; mkdir -p "$D"
+            env > "$D/env"; cp "$T/a.log" "$T/b.log" "$D/" 2>/dev/null || true
+            grep -E '^Sig' /proc/$$/status > "$D/sig"; cat /proc/$$/limits > "$D/limits"; pwd > "$D/cwd"
+            printf '%s\n' "$@" > "$D/args"
             rm -rf "$T"
           fi
           exec "$QEMU" "$GEN" "$@"

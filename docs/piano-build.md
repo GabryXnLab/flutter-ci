@@ -6,7 +6,46 @@ aperte, per la sessione in cui si rivedranno e centralizzeranno i componenti di 
 di tutti i progetti (Kagami su `flutter-ci`, Riftgate mobile su `expo-ci` e desktop su
 `desktop-ci`).
 
-## Obiettivi della prossima sessione
+## Esito della sessione del 26/09 (sera) — leggere prima questo
+
+Gli obiettivi qui sotto sono stati affrontati. L'architettura che ne è uscita, con il
+modello da seguire per ogni build nuova, sta nel `CLAUDE.md` di **`GabryXnLab/build-kit`**
+(nuovo repo privato, `~/repos/build-kit`): quello è ora il documento di riferimento; questo
+resta come storia e misure.
+
+| Scelta aperta | Decisione |
+| --- | --- |
+| 1. `max_workers` con parità | Fatto: `auto` (default: CPU libere al momento, minimo 2; su GitHub `nproc`) \| `2` \| `4`, in flutter-ci, expo-ci, desktop-ci (→ `CARGO_BUILD_JOBS`) e nei wrapper di Kagami, Riftgate mobile e desktop, ascend. Applicato da `build-kit/setup` con `GRADLE_OPTS -D`; parallelo di Gradle sempre acceso, limitato da `workers.max` |
+| 2. Heap di Gradle | Invariato (4 GB della macchina): due build insieme stanno in RAM |
+| 3. Daemon fra i run | No: il runner uccide gli orfani, e l'avvio JVM pesa secondi contro minuti di AOT |
+| 4. Configuration cache | Non provata: il guadagno è sulla configurazione (~30 s), non dove sta il tempo |
+| 5. Batch e parallelo | Secondo runner `nexus-core-2` (`~/ci/actions-runner-2`, stesso utente, cache in comune): due build insieme, provato con Kagami + Riftgate. `build-kit/bin/ci-batch` lancia più progetti in un colpo |
+| 6. Scelta del runner unificata | Nome `runner` nei wrapper; expo-ci senza percorso GitHub (resta EAS): rimandato |
+| 7. `clear_cache` unificato | Fatto: pulisce solo il progetto, e per quel run non si fida di build cache/ccache/sccache (`RECACHE`); le cache condivise non si cancellano più (expo-ci cancellava `~/.gradle/caches` e ccache) |
+| 8. `flutter_version` nel wrapper | Invariato |
+| 9. Repo pubblici | Non toccato |
+
+Scoperte principali:
+
+- **Il tempo della build release di Kagami era per il 60% `gen_snapshot` sotto QEMU**
+  (profilo: 545 s, di cui 321 di AOT, 51 di compilazione Dart, ~130 di Gradle quasi tutto
+  dalla build cache). Box64 v0.4.4 fa lo stesso in 45 s con output identico, ma in CI va
+  a volte in crash: il wrapper usa due esecuzioni concordi o ripiega su QEMU. QEMU non
+  accelera cambiando modello di CPU (317–328 s).
+- Build di Kagami senza modifiche al Dart dopo `clean: false`: **1m20s** l'intero run
+  (Build 41 s), contro i 7–15 minuti di prima.
+- Riftgate: mobile e desktop condividono la cartella di lavoro sul runner, e il `git clean`
+  dell'uno cancellava gli intermedi dell'altro; ora nessuno pulisce se non con
+  `clear_cache` e la target di cargo sta in `~/ci/cache/cargo-target/<repo>`. La build
+  desktop falliva comunque (`npm ci` su un progetto pnpm): corretto in desktop-ci.
+- `hermesc` di Riftgate con Box64: 43 s contro 95 s del QEMU di binfmt, identico.
+- La macchina non è più condivisa con GitLab (`gitlab-runner` rimosso il 25/09).
+
+Da misurare nelle prossime build normali: il tempo della build Kagami con modifiche al Dart
+(atteso ~3–4 minuti se Box64 concorda), la build mobile di Riftgate a macchina scarica (la
+prova del 26/09 era a carico 12–14), la prima build desktop con sccache.
+
+## Obiettivi della sessione (26/09, pomeriggio)
 
 1. **Rivedere e centralizzare** ciò che i tre reusable fanno ognuno a modo suo: scelta
    del runner, cache di Gradle, pulizia del checkout, firma, taratura della memoria.

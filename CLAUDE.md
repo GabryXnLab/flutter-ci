@@ -68,8 +68,11 @@ gh workflow list --repo GabryXnLab/<progetto>   # i wrapper che chiamano questi 
   precache` li salva; (2) il binario x86-64 sotto il QEMU di sistema (**8.2** di Ubuntu
   24.04) cade con «QEMU internal SIGSEGV {code=MAPERR, addr=0x20}». Con QEMU 10 passa, ma era
   il **60% della build** (321 s su 545, profilo del 26/09). Box64 v0.4.4 fa lo stesso lavoro
-  in **45 s** con un `app.so` identico byte per byte; se esce con errore il lanciatore
-  ripete con QEMU. Lo step *gen_snapshot per host ARM64* mette un wrapper dove Flutter cerca
+  in **45 s** con un `app.so` identico byte per byte, ma in CI è andato a volte in «double
+  free» (difetto di Box64 che dipende dalla disposizione della memoria): il wrapper compila
+  **due volte in parallelo** con ambienti di dimensione diversa e accetta l'`app.so` solo se
+  le due esecuzioni riescono e coincidono, altrimenti ripete con QEMU. Dettagli e misure
+  nel `CLAUDE.md` di `build-kit`. Lo step *gen_snapshot per host ARM64* mette un wrapper dove Flutter cerca
   l'eseguibile; emulatore e lanciatore li prepara `GabryXnLab/build-kit/x86-64` (input
   `x86_emulator`). `debug` non ci passa: è JIT.
 - **Sul self-hosted si va veloci facendo meno lavoro.** Il checkout non pulisce

@@ -136,10 +136,10 @@ on:
       x86_emulator:
         description: >-
           Come eseguire `gen_snapshot` x86-64 sul runner ARM64 (vedi lo step «gen_snapshot per
-          host ARM64»): qemu (default, QEMU 10) | box64 (~6 volte più veloce, ma su alcuni
-          input va in «double free» dentro gen_snapshot: in prova).
+          host ARM64»): box64 (default, ~7 volte più veloce, output identico; se Box64 esce con
+          errore si ripete con QEMU) | qemu (solo QEMU 10).
         required: false
-        default: 'qemu'
+        default: 'box64'
         type: string
       qemu_x86_64:
         description: 'Non più usato: il percorso di QEMU lo decide GabryXnLab/build-kit (x86-64). Resta per i wrapper che lo passano.'
@@ -354,7 +354,7 @@ jobs:
       #      «QEMU internal SIGSEGV {code=MAPERR, addr=0x20}»; con QEMU 10 passa.
       # Dove Flutter cerca l'eseguibile si mette un wrapper che lancia quello x86-64 con un
       # emulatore utente. Dal 26 settembre è Box64 (traduzione dinamica, libc nativa): su
-      # Kagami 53 s contro i 316 s di QEMU 10, con un app.so identico byte per byte — era il
+      # Kagami 45 s contro i 316 s di QEMU 10, con un app.so identico byte per byte — era il
       # 60% dell'intera build. L'emulatore lo prepara build-kit; qui solo il wrapper, scritto
       # con un mv atomico perché l'SDK è condiviso dai runner della macchina.
       # `debug` non ci passa: è JIT e non usa `gen_snapshot`.

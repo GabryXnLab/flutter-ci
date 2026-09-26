@@ -137,7 +137,7 @@ on:
         description: >-
           Come eseguire `gen_snapshot` x86-64 sul runner ARM64 (vedi lo step «gen_snapshot per
           host ARM64»): box64 (default: due esecuzioni Box64 in parallelo, accettate solo se
-          concordi, altrimenti QEMU; ~1 minuto invece di ~5) | qemu (solo QEMU 10).
+          concordi, altrimenti QEMU; ~46 s invece di ~5 min) | qemu (solo QEMU 10).
         required: false
         default: 'box64'
         type: string
@@ -354,14 +354,17 @@ jobs:
       #      «QEMU internal SIGSEGV {code=MAPERR, addr=0x20}»; con QEMU 10 passa.
       # Dove Flutter cerca l'eseguibile si mette un wrapper che lancia quello x86-64 con un
       # emulatore utente. QEMU 10 impiega 316 s su Kagami, il 60% dell'intera build. Box64
-      # (traduzione dinamica, libc nativa) ne impiega 45 con un app.so identico byte per
-      # byte, ma in CI è andato in «double free» dentro gen_snapshot su input che a mano
-      # passavano: un difetto che dipende dalla disposizione della memoria. Per questo il
-      # wrapper, con Box64, compila due volte in parallelo con ambienti di dimensione
-      # diversa (quindi memoria disposta diversamente) e accetta l'app.so solo se entrambe
-      # riescono e coincidono; altrimenti, o con opzioni che scrivono altri file, QEMU.
-      # Una corruzione che cambi l'output senza far cadere il programma dovrebbe ripetersi
-      # identica in due processi diversi: è ciò che rende sicuro il percorso veloce.
+      # (traduzione dinamica, libc nativa) ne impiega 46 con un app.so identico byte per
+      # byte, a una condizione: che il garbage collector del Dart VM dentro gen_snapshot non
+      # usi thread paralleli (--marker_tasks=1 --scavenger_tasks=1, niente marcatura e
+      # spazzata concorrenti). Con i thread del GC e la CPU contesa — in CI Gradle compila
+      # in parallelo all'AOT — Box64 cade in «double free or corruption» (riprodotto: 4 su 4
+      # sotto carico, 0 su 3 con quelle opzioni). Con --deterministic l'output non dipende
+      # dal GC. In più il wrapper compila due volte in parallelo con ambienti di dimensione
+      # diversa e accetta l'app.so solo se entrambe riescono e coincidono, altrimenti QEMU:
+      # una corruzione che cambi l'output senza far cadere il programma dovrebbe ripetersi
+      # identica in due processi diversi, ed è ciò che rende sicuro il percorso veloce.
+      # Costa una CPU in più per ~46 s. Opzioni che scrivono altri file → subito QEMU.
       # Scritto con un mv atomico perché l'SDK è condiviso dai runner della macchina.
       # `debug` non ci passa: è JIT e non usa `gen_snapshot`.
       - name: x86-64 emulator for gen_snapshot
@@ -404,7 +407,10 @@ jobs:
                 case "$a" in --elf=*) args+=("--elf=$dir/$F") ;; *) args+=("$a") ;; esac
               done
               mkdir -p "$dir"
-              KAGAMI_CI_PAD="$pad" BOX64_LOG=0 BOX64_NOBANNER=1 "$BOX64" "$GEN" "${args[@]}"
+              # GC del Dart VM senza thread paralleli: vedi il commento dello step.
+              CI_LAYOUT_PAD="$pad" BOX64_LOG=0 BOX64_NOBANNER=1 "$BOX64" "$GEN" \
+                --marker_tasks=1 --scavenger_tasks=1 --no-concurrent_mark --no-concurrent_sweep \
+                "${args[@]}"
             }
             run "$T/a" x "$@" > "$T/a.log" 2>&1 &
             A=$!
@@ -422,10 +428,6 @@ jobs:
             fi
             echo "gen_snapshot: Box64 non concorde (uscite $RA e $RB), ripeto con QEMU 10" >&2
             tail -n 3 "$T/a.log" "$T/b.log" >&2 || true
-            D="$HOME/ci/cache/gen_snapshot-diag/$(date +%s)"; mkdir -p "$D"
-            env > "$D/env"; cp "$T/a.log" "$T/b.log" "$D/" 2>/dev/null || true
-            grep -E '^Sig' /proc/$$/status > "$D/sig"; cat /proc/$$/limits > "$D/limits"; pwd > "$D/cwd"
-            printf '%s\n' "$@" > "$D/args"
             rm -rf "$T"
           fi
           exec "$QEMU" "$GEN" "$@"

@@ -26,8 +26,8 @@ docs/
                       le build di tutti i progetti (con expo-ci e desktop-ci)
 ```
 
-Chi riprende il lavoro sulle build (runner, Gradle, `max_workers`, batch) legge prima
-`docs/piano-build.md`.
+Chi riprende il lavoro sulle build legge prima il `CLAUDE.md` di `GabryXnLab/build-kit`
+(architettura comune, modello da seguire), poi `docs/piano-build.md` (misure e storia).
 
 ## Comandi
 
@@ -60,25 +60,28 @@ gh workflow list --repo GabryXnLab/<progetto>   # i wrapper che chiamano questi 
   solo per x86-64: sotto QEMU `dart` va in `SIGSEGV`. L'SDK è un clone git in
   `/home/ubuntu/sdk/flutter` e i workflow si limitano a verificarlo e metterlo in `PATH`.
   Per lo stesso motivo lì non si usa `subosito/flutter-action` (sui runner GitHub sì).
-- **L'AOT Android su host ARM64 passa da QEMU, e serve QEMU 10.** Due limiti, misurati:
-  (1) Flutter pubblica `gen_snapshot` per host **linux-x64** e non per host linux-arm64 —
-  `…/<engine>/android-arm64-release/linux-arm64.zip` risponde **404**, la stessa URL con
-  `linux-x64.zip` risponde 200 — quindi `release` e `profile` muoiono con «Failed to find
-  … /linux-arm64/gen_snapshot» e nessun `flutter precache` li salva; (2) il binario
-  x86-64 sotto il QEMU di sistema (**8.2** di Ubuntu 24.04) cade con «QEMU internal
-  SIGSEGV {code=MAPERR, addr=0x20}» — è QEMU a morire, non Dart, e non dipende da
-  `reserved_va` né dall'ASLR (provati). Con **QEMU 10** (Debian trixie, estratto con
-  `dpkg-deb` sotto `$HOME`, nessun sudo) la stessa compilazione passa. Lo step *Fallback
-  gen_snapshot per host ARM64* mette un wrapper dove Flutter cerca l'eseguibile e, se il
-  QEMU non c'è, se lo installa. Costo misurato su Kagami: APK release arm64 da 22,4 MB in
-  **8m10s** (contro ~70 s di una debug). `debug` non ci passa: è JIT.
-- **Sul self-hosted si va veloci facendo meno lavoro, non usando più risorse.**
-  Il checkout non pulisce (`clean: false`): gli intermedi di Gradle, Kotlin e CMake
-  restano fra i run e la build è incrementale; `clear_cache` riparte da zero. Worker,
-  parallelismo e heap di Gradle invece li decide `~/.gradle/gradle.properties` della
-  macchina (2 worker, niente parallelo, 4 GB, build cache accesa), che prevale su
-  quelli dei progetti ed è tarato così perché nexus-core è condivisa con GitLab e
-  altri servizi: non si alzano da qui.
+- **L'AOT Android su host ARM64 passa da un emulatore x86-64: Box64, con QEMU 10 di
+  riserva.** Due limiti, misurati: (1) Flutter pubblica `gen_snapshot` per host
+  **linux-x64** e non per host linux-arm64 — `…/<engine>/android-arm64-release/linux-arm64.zip`
+  risponde **404**, la stessa URL con `linux-x64.zip` risponde 200 — quindi `release` e
+  `profile` muoiono con «Failed to find … /linux-arm64/gen_snapshot» e nessun `flutter
+  precache` li salva; (2) il binario x86-64 sotto il QEMU di sistema (**8.2** di Ubuntu
+  24.04) cade con «QEMU internal SIGSEGV {code=MAPERR, addr=0x20}». Con QEMU 10 passa, ma era
+  il **60% della build** (321 s su 545, profilo del 26/09). Box64 v0.4.4 fa lo stesso lavoro
+  in **45 s** con un `app.so` identico byte per byte; se esce con errore il lanciatore
+  ripete con QEMU. Lo step *gen_snapshot per host ARM64* mette un wrapper dove Flutter cerca
+  l'eseguibile; emulatore e lanciatore li prepara `GabryXnLab/build-kit/x86-64` (input
+  `x86_emulator`). `debug` non ci passa: è JIT.
+- **Sul self-hosted si va veloci facendo meno lavoro.** Il checkout non pulisce
+  (`clean: false`): intermedi di Flutter, Gradle, Kotlin e CMake restano fra i run, e una
+  build che non cambia il Dart non rifà l'AOT (Kagami: 41 s di Build, 1m20s il run). Worker,
+  cache condivise fra progetti e `clear_cache` di sola esecuzione vengono da
+  `GabryXnLab/build-kit/setup`, uguale per expo-ci e desktop-ci: `max_workers` (`auto` |
+  `2` | `4`) arriva a Gradle con `GRADLE_OPTS -D`, che prevale su
+  `~/.gradle/gradle.properties` della macchina solo per quel run. `clear_cache` cancella le
+  cartelle del progetto e spegne la build cache per il run, ma non tocca `~/.gradle`,
+  pub-cache e ccache, che sono di tutti. Architettura e modello per ogni build nuova: il
+  `CLAUDE.md` di `build-kit`.
 - **`/opt/android-sdk` è condiviso con altri servizi della macchina.** I workflow non ci
   installano e non ci rimuovono niente. Attenzione: *Gradle* sì, di suo, quando un
   progetto dichiara un NDK o una platform che non c'è — è il progetto a doverlo

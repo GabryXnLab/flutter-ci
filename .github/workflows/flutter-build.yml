@@ -136,8 +136,8 @@ on:
       x86_emulator:
         description: >-
           Come eseguire `gen_snapshot` x86-64 sul runner ARM64 (vedi lo step «gen_snapshot per
-          host ARM64»): box64 (default, ~7 volte più veloce, output identico; se Box64 esce con
-          errore si ripete con QEMU) | qemu (solo QEMU 10).
+          host ARM64»): box64 (default: due esecuzioni Box64 in parallelo, accettate solo se
+          concordi, altrimenti QEMU; ~1 minuto invece di ~5) | qemu (solo QEMU 10).
         required: false
         default: 'box64'
         type: string
@@ -353,10 +353,16 @@ jobs:
       #   2. Il binario x86-64 sotto il QEMU di sistema (8.2 di Ubuntu 24.04) muore con
       #      «QEMU internal SIGSEGV {code=MAPERR, addr=0x20}»; con QEMU 10 passa.
       # Dove Flutter cerca l'eseguibile si mette un wrapper che lancia quello x86-64 con un
-      # emulatore utente. Dal 26 settembre è Box64 (traduzione dinamica, libc nativa): su
-      # Kagami 45 s contro i 316 s di QEMU 10, con un app.so identico byte per byte — era il
-      # 60% dell'intera build. L'emulatore lo prepara build-kit; qui solo il wrapper, scritto
-      # con un mv atomico perché l'SDK è condiviso dai runner della macchina.
+      # emulatore utente. QEMU 10 impiega 316 s su Kagami, il 60% dell'intera build. Box64
+      # (traduzione dinamica, libc nativa) ne impiega 45 con un app.so identico byte per
+      # byte, ma in CI è andato in «double free» dentro gen_snapshot su input che a mano
+      # passavano: un difetto che dipende dalla disposizione della memoria. Per questo il
+      # wrapper, con Box64, compila due volte in parallelo con ambienti di dimensione
+      # diversa (quindi memoria disposta diversamente) e accetta l'app.so solo se entrambe
+      # riescono e coincidono; altrimenti, o con opzioni che scrivono altri file, QEMU.
+      # Una corruzione che cambi l'output senza far cadere il programma dovrebbe ripetersi
+      # identica in due processi diversi: è ciò che rende sicuro il percorso veloce.
+      # Scritto con un mv atomico perché l'SDK è condiviso dai runner della macchina.
       # `debug` non ci passa: è JIT e non usa `gen_snapshot`.
       - name: x86-64 emulator for gen_snapshot
         id: x86
@@ -370,9 +376,56 @@ jobs:
         if: ${{ steps.x86.outputs.launcher != '' }}
         env:
           FLUTTER_SDK: ${{ inputs.flutter_sdk }}
-          LAUNCHER: ${{ steps.x86.outputs.launcher }}
+          BOX64: ${{ steps.x86.outputs.box64 }}
+          QEMU: ${{ steps.x86.outputs.qemu }}
         run: |
           set -euo pipefail
+          TEMPLATE="$RUNNER_TEMP/gen_snapshot.sh"
+          cat > "$TEMPLATE" <<'WRAPPER'
+          #!/bin/bash
+          # Generato da flutter-ci (flutter-build.yml, «gen_snapshot per host ARM64»).
+          GEN="$(dirname "$0")/../linux-x64/gen_snapshot"
+          BOX64="__BOX64__"
+          QEMU="__QEMU__"
+          OUT=""
+          for a in "$@"; do
+            case "$a" in
+              --elf=*) OUT="${a#--elf=}" ;;
+              --save-*|--loading-unit*|--*manifest*) OUT=""; break ;;
+            esac
+          done
+          if [ -n "$BOX64" ] && [ -n "$OUT" ]; then
+            T=$(mktemp -d)
+            F=$(basename "$OUT")
+            run() {
+              local dir=$1 pad=$2 a; shift 2
+              local args=()
+              for a in "$@"; do
+                case "$a" in --elf=*) args+=("--elf=$dir/$F") ;; *) args+=("$a") ;; esac
+              done
+              mkdir -p "$dir"
+              KAGAMI_CI_PAD="$pad" BOX64_LOG=0 BOX64_NOBANNER=1 "$BOX64" "$GEN" "${args[@]}"
+            }
+            run "$T/a" x "$@" > "$T/a.log" 2>&1 &
+            A=$!
+            run "$T/b" "$(printf '%0512d' 0)" "$@" > "$T/b.log" 2>&1 &
+            B=$!
+            RA=0; RB=0
+            wait "$A" || RA=$?
+            wait "$B" || RB=$?
+            if [ "$RA" = 0 ] && [ "$RB" = 0 ] && cmp -s "$T/a/$F" "$T/b/$F"; then
+              cat "$T/a.log"
+              mv -f "$T/a/$F" "$OUT"
+              rm -rf "$T"
+              echo "gen_snapshot: Box64, due esecuzioni concordi" >&2
+              exit 0
+            fi
+            echo "gen_snapshot: Box64 non concorde (uscite $RA e $RB), ripeto con QEMU 10" >&2
+            tail -n 3 "$T/a.log" "$T/b.log" >&2 || true
+            rm -rf "$T"
+          fi
+          exec "$QEMU" "$GEN" "$@"
+          WRAPPER
           ENGINE="$FLUTTER_SDK/bin/cache/artifacts/engine"
           FOUND=0
           for dir in "$ENGINE"/android-*-release "$ENGINE"/android-*-profile; do
@@ -382,10 +435,7 @@ jobs:
             # fa eseguire il binario dal QEMU di sistema, che è quello che va in SIGSEGV.
             if [ -L "$dir/linux-arm64" ]; then rm -f "$dir/linux-arm64"; fi
             mkdir -p "$dir/linux-arm64"
-            cat > "$dir/linux-arm64/gen_snapshot.new" <<EOF
-          #!/bin/sh
-          exec "$LAUNCHER" "\$(dirname "\$0")/../linux-x64/gen_snapshot" "\$@"
-          EOF
+            sed -e "s|__BOX64__|$BOX64|" -e "s|__QEMU__|$QEMU|" "$TEMPLATE" > "$dir/linux-arm64/gen_snapshot.new"
             chmod +x "$dir/linux-arm64/gen_snapshot.new"
             mv "$dir/linux-arm64/gen_snapshot.new" "$dir/linux-arm64/gen_snapshot"
           done
@@ -394,7 +444,7 @@ jobs:
             echo "Scaricalo una volta sul runner con: flutter precache --android --universal"
             exit 1
           fi
-          echo "gen_snapshot x86-64 via $LAUNCHER ($FOUND cartelle dell'engine)"
+          echo "gen_snapshot x86-64: ${BOX64:+Box64 verificato, }QEMU $QEMU ($FOUND cartelle dell'engine)"
 
       - name: Clear caches
         if: ${{ inputs.clear_cache == true }}

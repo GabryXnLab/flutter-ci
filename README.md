@@ -54,10 +54,18 @@ workflow lo verificano e si fermano subito se manca.
 | SDK Android | `/opt/android-sdk` | **Condiviso con altri servizi della macchina.** I workflow non ci installano né rimuovono pacchetti. |
 | JDK 17 | `/usr/lib/jvm/java-17-openjdk-arm64` | Gradle gira sulla JVM di sistema. |
 | Pub cache | `/home/ubuntu/.pub-cache` | Condivisa fra i run: è ciò che rende `flutter pub get` quasi istantaneo. |
-| QEMU 10 x86-64 | `/home/ubuntu/qemu-x86_64-10/bin/qemu-x86_64` | Serve all'AOT Android: Flutter non pubblica `gen_snapshot` per host linux-arm64 e quello x86-64 sotto il QEMU di sistema (8.2) va in SIGSEGV. È l'unico che il workflow **installa da sé** se manca, sotto `$HOME` e senza sudo. |
+| Box64 v0.4.4 e QEMU 10 x86-64 | `~/ci/tools/box64`, `/home/ubuntu/qemu-x86_64-10/bin/qemu-x86_64` | Servono all'AOT Android: Flutter non pubblica `gen_snapshot` per host linux-arm64, e quello x86-64 sotto il QEMU di sistema (8.2) va in SIGSEGV. Box64 (default, 45 s) con QEMU 10 di riserva (316 s). Li installa da sé, sotto `$HOME` e senza sudo, l'azione `GabryXnLab/build-kit/x86-64`. |
 
 Tutti questi percorsi sono input con quel default: un runner diverso li sovrascrive
 senza toccare questo repo.
+
+## Worker e cache: `build-kit`
+
+`flutter-build.yml` passa per `GabryXnLab/build-kit/setup`, come expo-ci e desktop-ci:
+input `max_workers` (`auto` = CPU libere di nexus-core in quel momento, minimo 2 | `2` |
+`4`) e `clear_cache` con lo stesso significato in tutti i workflow di build. Sul
+self-hosted girano due runner (`nexus-core`, `nexus-core-2`), quindi due build insieme;
+`~/repos/build-kit/bin/ci-batch` le lancia in un colpo.
 
 ## Build sui runner di GitHub
 

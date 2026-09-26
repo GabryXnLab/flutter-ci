@@ -1,6 +1,7 @@
 name: Flutter Build (reusable)
 
-# Workflow riusabile per le build Flutter sul runner self-hosted `nexus-core` (ARM64).
+# Workflow riusabile per le build Flutter: di norma sul runner self-hosted `nexus-core`
+# (ARM64), a scelta (`runner: github`) su un runner x86-64 di GitHub.
 # Chiamato dai thin wrapper dei progetti via:
 #   uses: GabryXnLab/flutter-ci/.github/workflows/flutter-build.yml@main
 #
@@ -14,6 +15,22 @@ on:
       app_name:
         description: 'Nome app (es. Kagami) — usato per il nome dell artifact e per la notifica Telegram'
         required: true
+        type: string
+      runner:
+        description: >-
+          self-hosted = nexus-core (default: SDK, pub cache e Gradle già caldi, nessun minuto
+          Actions) | github = ubuntu-latest, quando nexus-core non deve prendere altro carico.
+          Su GitHub l SDK Flutter si scarica (x86-64, niente QEMU) e la chiave di firma
+          arriva dal secret ANDROID_DEBUG_KEYSTORE.
+        required: false
+        default: 'self-hosted'
+        type: string
+      flutter_version:
+        description: >-
+          Solo con runner=github: la versione Flutter da scaricare (es. 3.47.4), la stessa del
+          clone sul runner self-hosted. Vuoto = l ultima stable.
+        required: false
+        default: ''
         type: string
       platform:
         description: 'android = APK/AAB per il telefono | linux = bundle desktop ARM64 (utile per provare la UI senza telefono)'
@@ -149,18 +166,16 @@ on:
       # default è scoped al solo repo in build. Se assente → github.token.
       SUBMODULES_TOKEN:
         required: false
+      # Solo con runner=github: il debug.keystore di nexus-core in base64. L APK si firma
+      # con quello, e un runner GitHub ne genererebbe uno nuovo a ogni build: l APK non si
+      # installerebbe sopra quello del telefono e Google Sign-In rifiuterebbe l impronta.
+      ANDROID_DEBUG_KEYSTORE:
+        required: false
 
 jobs:
   build:
     name: ${{ inputs.app_name }} · ${{ inputs.platform }} ${{ inputs.build_mode }}
-    runs-on: [self-hosted, nexus-core]
-    env:
-      ANDROID_HOME: ${{ inputs.android_sdk }}
-      ANDROID_SDK_ROOT: ${{ inputs.android_sdk }}
-      JAVA_HOME: ${{ inputs.java_home }}
-      # Flutter scrive qui le sue preferenze: senza, sul runner userebbe $HOME e
-      # due job concorrenti si contenderebbero lo stesso file.
-      PUB_CACHE: /home/ubuntu/.pub-cache
+    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "nexus-core"]') }}
     steps:
       # «In corso» con ⏹ Annulla (ci-bot); lo step finale riscrive lo stesso messaggio.
       - name: Notify start via Telegram
@@ -182,7 +197,63 @@ jobs:
       # L'SDK non si scarica: si verifica che ci sia e lo si mette in PATH per
       # tutti gli step successivi. Se manca, il job deve dirlo subito e chiaro,
       # non fallire fra venti minuti su un comando non trovato.
+      # Sul self-hosted l ambiente punta all SDK Android condiviso, al JDK e alla pub cache
+      # della macchina. Si scrive qui e non a livello di job: su GitHub quelle variabili
+      # hanno già i valori giusti del runner, e un `env:` di job non si può omettere a
+      # condizione. PUB_CACHE fissa: senza, Flutter userebbe $HOME del runner e due job
+      # concorrenti si contenderebbero lo stesso file.
+      - name: Configure self-hosted environment
+        if: ${{ inputs.runner != 'github' }}
+        env:
+          ANDROID_SDK: ${{ inputs.android_sdk }}
+          JAVA: ${{ inputs.java_home }}
+        run: |
+          set -euo pipefail
+          {
+            echo "ANDROID_HOME=$ANDROID_SDK"
+            echo "ANDROID_SDK_ROOT=$ANDROID_SDK"
+            echo "JAVA_HOME=$JAVA"
+            echo "PUB_CACHE=/home/ubuntu/.pub-cache"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up Java (GitHub runner)
+        if: ${{ inputs.runner == 'github' }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Su un runner x86-64 la tarball ufficiale va bene: il divieto di scaricare l SDK
+      # vale solo per nexus-core, che è ARM64.
+      - name: Set up Flutter (GitHub runner)
+        if: ${{ inputs.runner == 'github' }}
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ inputs.flutter_version }}
+          cache: true
+
+      - name: Linux desktop dependencies (GitHub runner)
+        if: ${{ inputs.runner == 'github' && inputs.platform == 'linux' }}
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libgtk-3-dev
+
+      - name: Restore signing key (GitHub runner)
+        if: ${{ inputs.runner == 'github' && inputs.platform == 'android' }}
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEYSTORE" ]; then
+            echo "::warning::ANDROID_DEBUG_KEYSTORE assente: APK firmato con una chiave nuova, che non si installa sopra quella del telefono e che Google Sign-In non riconosce."
+            exit 0
+          fi
+          mkdir -p "$HOME/.android"
+          printf '%s' "$KEYSTORE" | base64 -d > "$HOME/.android/debug.keystore"
+          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android \
+            | grep -E 'SHA1:|SHA256:' | head -2
+
       - name: Resolve Flutter SDK
+        if: ${{ inputs.runner != 'github' }}
         env:
           FLUTTER_SDK: ${{ inputs.flutter_sdk }}
         run: |
@@ -215,7 +286,7 @@ jobs:
       # condiviso, e lo step è idempotente.
       # `debug` non ci passa: è JIT e non usa `gen_snapshot`.
       - name: Fallback gen_snapshot per host ARM64
-        if: ${{ inputs.platform == 'android' && inputs.build_mode != 'debug' }}
+        if: ${{ inputs.runner != 'github' && inputs.platform == 'android' && inputs.build_mode != 'debug' }}
         env:
           FLUTTER_SDK: ${{ inputs.flutter_sdk }}
           QEMU_BIN: ${{ inputs.qemu_x86_64 }}

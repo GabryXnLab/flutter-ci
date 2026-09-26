@@ -38,10 +38,17 @@ gh workflow list --repo GabryXnLab/<progetto>   # i wrapper che chiamano questi 
   SHA: un push qui cambia il comportamento di ogni progetto al run successivo. Gli input
   restano retrocompatibili — se ne aggiungono con `default`, non se ne rinominano né
   rimuovono senza aggiornare tutti i wrapper.
-- **L'SDK Flutter non si scarica in CI.** Il runner è ARM64 e la tarball ufficiale esiste
+- **Di norma tutto gira su nexus-core; `runner: github` è l'eccezione.** Serve quando
+  la macchina non deve prendere altro carico. Su `ubuntu-latest` si saltano gli step
+  del self-hosted (SDK in `PATH`, QEMU, `env` della macchina scritto in `GITHUB_ENV` e
+  non a livello di job, perché un `env:` di job non si può omettere a condizione) e si
+  usano `setup-java` e `subosito/flutter-action`. La chiave di firma arriva dal secret
+  `ANDROID_DEBUG_KEYSTORE`: senza, l'APK ha un'altra firma e non si installa sopra
+  quello del telefono. Vedi README.
+- **L'SDK Flutter non si scarica in CI** sul self-hosted. Il runner è ARM64 e la tarball ufficiale esiste
   solo per x86-64: sotto QEMU `dart` va in `SIGSEGV`. L'SDK è un clone git in
   `/home/ubuntu/sdk/flutter` e i workflow si limitano a verificarlo e metterlo in `PATH`.
-  Per lo stesso motivo non si usa `subosito/flutter-action`.
+  Per lo stesso motivo lì non si usa `subosito/flutter-action` (sui runner GitHub sì).
 - **L'AOT Android su host ARM64 passa da QEMU, e serve QEMU 10.** Due limiti, misurati:
   (1) Flutter pubblica `gen_snapshot` per host **linux-x64** e non per host linux-arm64 —
   `…/<engine>/android-arm64-release/linux-arm64.zip` risponde **404**, la stessa URL con
@@ -62,7 +69,8 @@ gh workflow list --repo GabryXnLab/<progetto>   # i wrapper che chiamano questi 
   dipendenze dell'SDK e lascia un lockfile incoerente. `dart run build_runner` invece è
   corretto ed è il comando documentato dai progetti.
 - **Niente firma di release.** I progetti che passano di qui sono sideload: l'APK
-  `release` esce firmato con il `debug.keystore` generato dal template Flutter. Il giorno
+  `release` esce firmato con il `debug.keystore` del runner (su GitHub quello di
+  nexus-core, dal secret `ANDROID_DEBUG_KEYSTORE`). Il giorno
   che servirà un'identità di firma vera (Play Services, Google Sign-In) si aggiungerà un
   input `signing_keystore` come in `expo-ci`, con il keystore sul runner in
   `/home/ubuntu/secrets/` e la verifica dell'impronta dopo la build — non prima che

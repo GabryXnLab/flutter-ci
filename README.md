@@ -59,6 +59,26 @@ workflow lo verificano e si fermano subito se manca.
 Tutti questi percorsi sono input con quel default: un runner diverso li sovrascrive
 senza toccare questo repo.
 
+## Build sui runner di GitHub
+
+`flutter-build.yml` ha l'input `runner`: `self-hosted` (default, tutto quanto sopra) o
+`github`, per quando nexus-core non deve prendere altro carico. Su `ubuntu-latest`
+niente della tabella serve: il JDK 17 lo mette `actions/setup-java`, l'SDK Flutter
+`subosito/flutter-action` (x86-64, quindi la tarball ufficiale va bene) alla versione di
+`flutter_version`, e l'AOT non passa da QEMU. Consuma minuti Actions.
+
+La firma è l'unica cosa da portarsi dietro: l'APK si firma col `debug.keystore` di
+nexus-core, e un runner nuovo ne genererebbe un altro a ogni build — l'APK non si
+installerebbe sopra quello del telefono e Google Sign-In non ne riconoscerebbe
+l'impronta. Il progetto lo passa nel secret `ANDROID_DEBUG_KEYSTORE`, in base64:
+
+```bash
+base64 -w0 ~/.android/debug.keystore | gh secret set ANDROID_DEBUG_KEYSTORE -R GabryXnLab/<progetto>
+```
+
+Il wrapper espone la scelta come input `choice` e passa `runner`, `flutter_version` e il
+secret.
+
 ## Perché non è un submodule
 
 Un reusable workflow GitHub **deve** stare in `.github/workflows/` di un repository e si

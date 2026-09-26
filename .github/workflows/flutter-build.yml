@@ -231,7 +231,47 @@ jobs:
         with:
           channel: stable
           flutter-version: ${{ inputs.flutter_version }}
+          # SDK e pub cache: il download dell SDK era un minuto a ogni run.
           cache: true
+
+      # Dipendenze e risultati di Gradle da un run all altro: senza, ogni build scarica AGP,
+      # Kotlin e tutte le librerie Android (quattro minuti nel primo run).
+      - name: Gradle cache (GitHub runner)
+        if: ${{ inputs.runner == 'github' && inputs.platform == 'android' }}
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+
+      # Il runner standard di un repo privato ha 2 CPU e 7 GB: i progetti tarano Gradle su
+      # nexus-core (Kagami chiede 8 GB di heap e 4 di Metaspace), e con il demone Kotlin
+      # accanto la macchina finiva la memoria e GitHub spegneva il runner a metà build
+      # (run 36252509943: «received a shutdown signal», Gradle uscito con 143). Il
+      # gradle.properties dell utente prevale su quello del progetto, e cambia solo la
+      # memoria dei processi: l APK è lo stesso. Sopra i 12 GB (runner dei repo pubblici)
+      # restano i valori del progetto. Lo swap è la rete sotto: meglio lento che spento.
+      - name: Fit Gradle to the runner (GitHub runner)
+        if: ${{ inputs.runner == 'github' && inputs.platform == 'android' }}
+        run: |
+          set -euo pipefail
+          CPUS=$(nproc)
+          MEM_GB=$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 1024 / 1024 ))
+          echo "Runner: $CPUS CPU, ${MEM_GB} GB di RAM"
+          if [ -z "$(swapon --show --noheadings)" ] || [ "$MEM_GB" -lt 12 ]; then
+            sudo fallocate -l 8G /mnt/flutter-ci.swap
+            sudo chmod 600 /mnt/flutter-ci.swap
+            sudo mkswap /mnt/flutter-ci.swap >/dev/null
+            sudo swapon /mnt/flutter-ci.swap
+          fi
+          swapon --show
+          if [ "$MEM_GB" -lt 12 ]; then
+            mkdir -p "$HOME/.gradle"
+            {
+              echo "org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g -XX:ReservedCodeCacheSize=256m -XX:+HeapDumpOnOutOfMemoryError"
+              echo "kotlin.daemon.jvmargs=-Xmx1536m"
+              echo "org.gradle.workers.max=$CPUS"
+            } >> "$HOME/.gradle/gradle.properties"
+            cat "$HOME/.gradle/gradle.properties"
+          fi
 
       - name: Linux desktop dependencies (GitHub runner)
         if: ${{ inputs.runner == 'github' && inputs.platform == 'linux' }}

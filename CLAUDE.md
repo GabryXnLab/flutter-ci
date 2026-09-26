@@ -44,7 +44,12 @@ gh workflow list --repo GabryXnLab/<progetto>   # i wrapper che chiamano questi 
   non a livello di job, perché un `env:` di job non si può omettere a condizione) e si
   usano `setup-java` e `subosito/flutter-action`. La chiave di firma arriva dal secret
   `ANDROID_DEBUG_KEYSTORE`: senza, l'APK ha un'altra firma e non si installa sopra
-  quello del telefono. Vedi README.
+  quello del telefono. Vedi README. L'organizzazione è sul piano Free: niente runner
+  più grandi (sono solo Team/Enterprise, e i benefici Education valgono per l'account
+  personale), e un repo privato ha il runner standard da 2 CPU e 7 GB. Per questo lo
+  step «Fit Gradle to the runner» abbassa la memoria di Gradle e Kotlin sotto i 12 GB
+  (i valori dei progetti sono per nexus-core: il primo run su GitHub è stato spento per
+  memoria esaurita) e aggiunge swap; Gradle e l'SDK sono in cache fra i run.
 - **L'SDK Flutter non si scarica in CI** sul self-hosted. Il runner è ARM64 e la tarball ufficiale esiste
   solo per x86-64: sotto QEMU `dart` va in `SIGSEGV`. L'SDK è un clone git in
   `/home/ubuntu/sdk/flutter` e i workflow si limitano a verificarlo e metterlo in `PATH`.

@@ -136,9 +136,10 @@ on:
       x86_emulator:
         description: >-
           Come eseguire `gen_snapshot` x86-64 sul runner ARM64 (vedi lo step «gen_snapshot per
-          host ARM64»): box64 (default, ~6 volte più veloce, output identico) | qemu (QEMU 10).
+          host ARM64»): qemu (default, QEMU 10) | box64 (~6 volte più veloce, ma su alcuni
+          input va in «double free» dentro gen_snapshot: in prova).
         required: false
-        default: 'box64'
+        default: 'qemu'
         type: string
       qemu_x86_64:
         description: 'Non più usato: il percorso di QEMU lo decide GabryXnLab/build-kit (x86-64). Resta per i wrapper che lo passano.'

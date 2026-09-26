@@ -45,9 +45,15 @@ Scoperte principali:
 - `hermesc` di Riftgate con Box64: 43 s contro 95 s del QEMU di binfmt, identico.
 - La macchina non è più condivisa con GitLab (`gitlab-runner` rimosso il 25/09).
 
+- Riftgate desktop dopo le correzioni (runner `nexus-core-2`): prima build 888 s a freddo
+  (riempie sccache e `~/ci/cache/cargo-target/Riftgate`), seconda **370 s**: frontend 61 s,
+  solo il crate dell'app ricompilato (119 s, profilo release), poi i bundle — **rpm 106 s,
+  AppImage 78 s**. Se servono solo `.deb` e AppImage, togliere `rpm` dai `bundle.targets`
+  del progetto è il prossimo guadagno (scelta del progetto, non della CI).
+
 Da misurare nelle prossime build normali: il tempo in CI della build Kagami con modifiche al
 Dart (atteso ~3–4 minuti di run), la build mobile di Riftgate a macchina scarica (la
-prova del 26/09 era a carico 12–14), la prima build desktop con sccache.
+prova del 26/09 era a carico 12–14).
 
 ## Obiettivi della sessione (26/09, pomeriggio)
 

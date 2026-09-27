@@ -109,4 +109,4 @@ GabryXnLab organization`).
 
 ## Progetti che lo usano
 
-- [`kagami`](https://github.com/GabryXnLab/kagami) — lettore di manga per archivi locali.
+- [`kagami-private`](https://github.com/GabryXnLab/kagami-private) — lettore di manga per archivi locali (il repo pubblico `kagami` usa un suo `ci.yml`).

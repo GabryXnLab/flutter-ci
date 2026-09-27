@@ -11,7 +11,7 @@ schema, un repo centrale con la logica e thin wrapper nei progetti.
 | :--- | :--- |
 | `flutter-build.yml` | APK/AAB Android o bundle Linux desktop, artifact del run + invio su Telegram |
 | `flutter-update.yml` | `flutter pub upgrade` con verifica e commit del lockfile |
-| `flutter-check.yml` | formato, analisi statica, test, controllo del codice generato |
+| `flutter-check.yml` | formato, analisi statica, test, pacchetti Dart puri (`dart_packages`), controllo del codice generato |
 
 ## Uso
 

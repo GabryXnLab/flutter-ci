@@ -28,6 +28,16 @@ on:
         required: false
         default: true
         type: boolean
+      dart_packages:
+        description: >-
+          Cartelle di pacchetti Dart puri nel repo, separate da spazi (es.
+          `packages/core server`): per ognuna `dart pub get`, `dart analyze` e, se
+          c'è `test/`, `dart test`. Servono ai pacchetti che non dipendono da
+          Flutter (un server, un motore condiviso): hanno il loro pubspec e la
+          radice non li risolve. Vuoto = niente.
+        required: false
+        default: ''
+        type: string
       verify_generated:
         description: >-
           Rigenera con build_runner e fallisce se il risultato differisce da ciò che è
@@ -103,6 +113,19 @@ jobs:
       - name: Test
         if: ${{ inputs.run_tests == true }}
         run: flutter test
+
+      - name: Dart packages
+        if: ${{ inputs.dart_packages != '' }}
+        env:
+          DART_PACKAGES: ${{ inputs.dart_packages }}
+        run: |
+          set -euo pipefail
+          for dir in $DART_PACKAGES; do
+            echo "::group::$dir"
+            (cd "$dir" && dart pub get && dart analyze --fatal-infos \
+              && if [ -d test ]; then dart test; fi)
+            echo "::endgroup::"
+          done
 
       # Si rigenera e si confronta con git: se il generato committato è vecchio, il
       # diff lo dice per nome di file invece di lasciarlo scoprire in esecuzione.

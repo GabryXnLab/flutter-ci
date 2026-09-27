@@ -20,7 +20,7 @@ step sono bash (`set -euo pipefail`) e, dove serve parsare, `python3` del sistem
 .github/workflows/
   flutter-build.yml   APK/AAB Android o bundle Linux, artifact + invio Telegram
   flutter-update.yml  flutter pub upgrade, verifica, commit del lockfile
-  flutter-check.yml   format, analyze, test, controllo del codice generato
+  flutter-check.yml   format, analyze, test, pacchetti Dart puri (`dart_packages`), controllo del codice generato
 docs/
   piano-build.md      misure, scelte fatte e aperte per centralizzare e velocizzare
                       le build di tutti i progetti (con expo-ci e desktop-ci)

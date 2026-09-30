@@ -151,11 +151,11 @@ con `default`, mai rinominare o rimuovere senza aggiornare ogni wrapper).
 
 ## Visibilità
 
-Questo repo è **privato**: perché gli altri repo dell'organizzazione possano usarne i
-workflow, le impostazioni Actions del repo devono consentire l'accesso ai repository
-dell'organizzazione (`Settings → Actions → Access → Accessible from repositories in the
-GabryXnLab organization`).
+Questo repo è **pubblico**: lo chiamano anche repo pubblici (Kagami), che GitHub non lascia
+usare workflow o azioni di repo privati. Per lo stesso motivo le azioni che usa stanno in
+`GabryXnLab/build-kit`, pubblico anche lui. Qui non c'è niente di segreto: chiavi, token e
+configurazioni arrivano dai secret di chi chiama.
 
 ## Progetti che lo usano
 
-- [`kagami-private`](https://github.com/GabryXnLab/kagami-private) — lettore di manga per archivi locali (il repo pubblico `kagami` usa un suo `ci.yml`).
+- [`kagami`](https://github.com/GabryXnLab/kagami) — lettore di manga per archivi MALF: `build.yml` (APK per ABI, universale e IPA su GitHub a ogni push su `main` del repo pubblico) e, dal repo di sviluppo privato, `build-android.yml`, `check.yml` e `update-deps.yml` sul self-hosted.

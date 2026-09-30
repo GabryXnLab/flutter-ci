@@ -82,9 +82,8 @@ prova del 26/09 era a carico 12–14).
 | Firma | debug.keystore del runner; su GitHub dal secret `ANDROID_DEBUG_KEYSTORE` | input `signing_keystore` (keystore in `/home/ubuntu/secrets/`) con verifica dello SHA-1 | chiavi Tauri dai secret |
 | `clear_cache` | toglie `build/`, `.dart_tool/`, `android/.gradle` | toglie anche `~/.gradle/caches` e ccache | — |
 
-I job del terminale di Riftgate (`build-mobile.yml`: dropbear, wg-core, tailscale,
-immagine del terminale) girano già su `ubuntu-latest` / `ubuntu-24.04-arm`, non su
-nexus-core.
+Gli altri job di Riftgate (`build-mobile.yml`, oltre all'app) girano già su
+`ubuntu-latest` / `ubuntu-24.04-arm`, non su nexus-core.
 
 ### nexus-core: la configurazione di Gradle vince su tutto
 
@@ -171,8 +170,7 @@ demone Kotlin accanto.
   supported for this organization»).
 - **GitHub Education** dà GitHub Pro all'account personale **GabryXn** (più minuti e più
   spazio per i repo personali), **non** all'organizzazione, e non dà runner più grandi.
-  I repo privati dell'organizzazione usano la quota Free: 2 000 minuti al mese. A
-  settembre ne erano stati usati circa 290 (Riftgate, ops-kit, git-sync-kde…).
+  I repo privati dell'organizzazione usano la quota Free: 2 000 minuti al mese.
 - **Runner standard**: repo privato 2 CPU / 7 GB; repo **pubblico** 4 CPU / 16 GB e
   minuti illimitati. Rendere pubblico un repo è l'unico modo gratuito di avere una
   macchina più grande (da decidere repo per repo).
@@ -254,5 +252,4 @@ demone Kotlin accanto.
   SDK Android condiviso) e percorso GitHub.
 - `kagami/.github/workflows/CLAUDE.md`: il wrapper di Kagami e il secret della firma.
 - `Riftgate/.github/workflows/CLAUDE.md`, `expo-ci`, `desktop-ci`: gli altri due reusable.
-- Wiki `Configurazioni`: nexus-core, runner self-hosted, bot Telegram (`@BobCI_bot`,
-  topic Build 6).
+- Wiki dell'infrastruttura: nexus-core, runner self-hosted, bot Telegram della CI.

@@ -48,9 +48,9 @@ gh workflow list --repo GabryXnLab/<progetto>   # i wrapper che chiamano questi 
   la macchina non deve prendere altro carico. Su `ubuntu-latest` si saltano gli step
   del self-hosted (SDK in `PATH`, QEMU, `env` della macchina scritto in `GITHUB_ENV` e
   non a livello di job, perché un `env:` di job non si può omettere a condizione) e si
-  usano `setup-java` e `subosito/flutter-action`. La chiave di firma arriva dal secret
-  `ANDROID_DEBUG_KEYSTORE`: senza, l'APK ha un'altra firma e non si installa sopra
-  quello del telefono. Vedi README. L'organizzazione è sul piano Free: niente runner
+  usano `setup-java` e `subosito/flutter-action`. La chiave di firma arriva dai secret
+  (`ANDROID_KEYSTORE*`, o `ANDROID_DEBUG_KEYSTORE`): senza, l'APK ha un'altra firma e non
+  si installa sopra quello del telefono. Vedi README. L'organizzazione è sul piano Free: niente runner
   più grandi (sono solo Team/Enterprise, e i benefici Education valgono per l'account
   personale), e un repo privato ha il runner standard da 2 CPU e 7 GB. Per questo lo
   step «Fit Gradle to the runner» abbassa la memoria di Gradle e Kotlin sotto i 12 GB
@@ -93,13 +93,15 @@ gh workflow list --repo GabryXnLab/<progetto>   # i wrapper che chiamano questi 
 - **`flutter pub`, mai `dart pub`.** In un progetto Flutter il secondo risolve senza le
   dipendenze dell'SDK e lascia un lockfile incoerente. `dart run build_runner` invece è
   corretto ed è il comando documentato dai progetti.
-- **Niente firma di release.** I progetti che passano di qui sono sideload: l'APK
-  `release` esce firmato con il `debug.keystore` del runner (su GitHub quello di
-  nexus-core, dal secret `ANDROID_DEBUG_KEYSTORE`). Il giorno
-  che servirà un'identità di firma vera (Play Services, Google Sign-In) si aggiungerà un
-  input `signing_keystore` come in `expo-ci`, con il keystore sul runner in
-  `/home/ubuntu/secrets/` e la verifica dell'impronta dopo la build — non prima che
-  serva.
+- **La firma passa da `android/key.properties`, mai da `~/.android/debug.keystore`.**
+  Sui runner di GitHub Gradle ignora il `debug.keystore` copiato lì e ne genera uno
+  nuovo: su Kagami l'APK usciva con una SHA-1 diversa da quella del secret (verificato con
+  `apksigner`). Il keystore dei secret (`ANDROID_KEYSTORE*`, o `ANDROID_DEBUG_KEYSTORE` su
+  GitHub per compatibilità) va in `RUNNER_TEMP`, `key.properties` nel checkout e si
+  cancella a fine job. È il progetto a doverlo leggere nel suo `build.gradle`: per questo,
+  con una chiave nei secret, lo step «Signature» confronta la SHA-1 di ogni release con quella
+  della chiave e fallisce se sono diverse. Senza secret, sul self-hosted resta la chiave
+  della macchina.
 - **La notifica Telegram passa dall'azione `GabryXnLab/build-kit/notify@main`**, copia
   pubblica di quella di `ci-bot` (che resta privato): best-effort, artefatto o riepilogo se
   il job riesce, altrimenti messaggio con il pulsante «🔁 Rilancia». Token e chat arrivano

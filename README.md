@@ -75,17 +75,29 @@ niente della tabella serve: il JDK 17 lo mette `actions/setup-java`, l'SDK Flutt
 `subosito/flutter-action` (x86-64, quindi la tarball ufficiale va bene) alla versione di
 `flutter_version`, e l'AOT non passa da QEMU. Consuma minuti Actions.
 
-La firma è l'unica cosa da portarsi dietro: l'APK si firma col `debug.keystore` di
-nexus-core, e un runner nuovo ne genererebbe un altro a ogni build — l'APK non si
-installerebbe sopra quello del telefono e Google Sign-In non ne riconoscerebbe
-l'impronta. Il progetto lo passa nel secret `ANDROID_DEBUG_KEYSTORE`, in base64:
+Il wrapper espone la scelta come input `choice` e passa `runner`, `flutter_version` e i
+secret della firma.
 
-```bash
-base64 -w0 ~/.android/debug.keystore | gh secret set ANDROID_DEBUG_KEYSTORE -R GabryXnLab/<progetto>
-```
+## Firma
 
-Il wrapper espone la scelta come input `choice` e passa `runner`, `flutter_version` e il
-secret.
+L'APK/AAB `release` si firma con la chiave che il progetto passa nei secret, su qualunque
+runner:
+
+| Secret | Senza |
+| :--- | :--- |
+| `ANDROID_KEYSTORE` | sul self-hosted la chiave della macchina, come sempre; su GitHub `ANDROID_DEBUG_KEYSTORE`, e senza anche quello una chiave nuova a ogni run (avviso nel log) |
+| `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | quelli di una chiave di debug: `android`, `androiddebugkey`, password della chiave = password del keystore |
+| `ANDROID_DEBUG_KEYSTORE` | solo su GitHub e solo senza `ANDROID_KEYSTORE`: il `debug.keystore` di nexus-core, per chi lo passa già |
+
+Il keystore (in base64: `base64 -w0 <file> | gh secret set ANDROID_KEYSTORE -R
+GabryXnLab/<progetto>`) arriva a Gradle da `android/key.properties`, lo schema della
+[documentazione di Flutter](https://docs.flutter.dev/deployment/android#configure-signing-in-gradle):
+**il `build.gradle` del progetto deve leggerlo**. Copiarlo in `~/.android/debug.keystore`
+non basta, perché sui runner di GitHub Gradle ignora quel file e ne genera un altro.
+Dopo la build il riepilogo del run ha la SHA-1 di ogni file prodotto; se c'era una chiave
+nei secret e la firma di una release è un'altra, la build fallisce invece di consegnare un APK che non
+si installa sopra il precedente. A fine job `key.properties` si cancella (sul self-hosted
+il checkout resta fra i run).
 
 ## Perché non è un submodule
 

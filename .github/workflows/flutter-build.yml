@@ -21,7 +21,7 @@ on:
           self-hosted = nexus-core (default: SDK, pub cache e Gradle già caldi, nessun minuto
           Actions) | github = ubuntu-latest, quando nexus-core non deve prendere altro carico.
           Su GitHub l SDK Flutter si scarica (x86-64, niente QEMU) e la chiave di firma
-          arriva dal secret ANDROID_DEBUG_KEYSTORE.
+          arriva dai secret ANDROID_KEYSTORE* (o ANDROID_DEBUG_KEYSTORE).
         required: false
         default: 'self-hosted'
         type: string
@@ -183,9 +183,25 @@ on:
       # default è scoped al solo repo in build. Se assente → github.token.
       SUBMODULES_TOKEN:
         required: false
-      # Solo con runner=github: il debug.keystore di nexus-core in base64. L APK si firma
-      # con quello, e un runner GitHub ne genererebbe uno nuovo a ogni build: l APK non si
-      # installerebbe sopra quello del telefono e Google Sign-In rifiuterebbe l impronta.
+      # La chiave con cui firmare l APK/AAB release, in base64 (`base64 -w0 <file>`), su
+      # qualunque runner. Arriva a Gradle da android/key.properties, che il build.gradle del
+      # progetto deve leggere (lo schema della documentazione di Flutter): il workflow
+      # controlla dopo la build che la firma sia davvero quella. Senza, sul self-hosted si
+      # firma come oggi con la chiave della macchina.
+      ANDROID_KEYSTORE:
+        required: false
+      # Vuoti = quelli di una chiave di debug: `android`, `androiddebugkey`, e la password
+      # della chiave uguale a quella del keystore.
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
+      ANDROID_KEY_ALIAS:
+        required: false
+      ANDROID_KEY_PASSWORD:
+        required: false
+      # Solo con runner=github e senza ANDROID_KEYSTORE: il debug.keystore di nexus-core in
+      # base64, per i chiamanti che lo passano già. Un runner GitHub ne genererebbe uno nuovo
+      # a ogni build: l APK non si installerebbe sopra quello del telefono e Google Sign-In
+      # rifiuterebbe l impronta.
       ANDROID_DEBUG_KEYSTORE:
         required: false
 
@@ -302,20 +318,50 @@ jobs:
         if: ${{ inputs.runner == 'github' && inputs.platform == 'linux' }}
         run: sudo apt-get update && sudo apt-get install -y ninja-build libgtk-3-dev
 
-      - name: Restore signing key (GitHub runner)
-        if: ${{ inputs.runner == 'github' && inputs.platform == 'android' }}
+      # La chiave arriva a Gradle da android/key.properties, la convenzione di Flutter per la
+      # firma. Scriverla in ~/.android/debug.keystore non basta: sui runner di GitHub Gradle
+      # la ignora e ne genera una nuova (verificato su Kagami con apksigner, SHA-1 diversa da
+      # quella del secret). Il keystore sta in RUNNER_TEMP, che il runner svuota a ogni job;
+      # key.properties si toglie a fine job, perché sul self-hosted il checkout resta.
+      - name: Signing key
+        id: signing
+        if: ${{ inputs.platform == 'android' }}
         env:
-          KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
+          RUNNER_KIND: ${{ inputs.runner }}
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          DEBUG_KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
         run: |
           set -euo pipefail
+          if [ -z "$KEYSTORE" ] && [ "$RUNNER_KIND" = "github" ]; then KEYSTORE=$DEBUG_KEYSTORE; fi
           if [ -z "$KEYSTORE" ]; then
-            echo "::warning::ANDROID_DEBUG_KEYSTORE assente: APK firmato con una chiave nuova, che non si installa sopra quella del telefono e che Google Sign-In non riconosce."
+            if [ "$RUNNER_KIND" = "github" ]; then
+              echo "::warning::Né ANDROID_KEYSTORE né ANDROID_DEBUG_KEYSTORE: APK firmato con una chiave nuova, che non si installa sopra quella del telefono e che Google Sign-In non riconosce."
+            fi
             exit 0
           fi
-          mkdir -p "$HOME/.android"
-          printf '%s' "$KEYSTORE" | base64 -d > "$HOME/.android/debug.keystore"
-          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android \
-            | grep -E 'SHA1:|SHA256:' | head -2
+          STORE="$RUNNER_TEMP/signing.keystore"
+          printf '%s' "$KEYSTORE" | base64 -d > "$STORE"
+          STORE_PASSWORD=${STORE_PASSWORD:-android}
+          KEY_ALIAS=${KEY_ALIAS:-androiddebugkey}
+          KEY_PASSWORD=${KEY_PASSWORD:-$STORE_PASSWORD}
+          {
+            echo "storeFile=$STORE"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > android/key.properties
+          echo "written=true" >> "$GITHUB_OUTPUT"
+          SHA1=$("${JAVA_HOME:+$JAVA_HOME/bin/}keytool" -list -v -keystore "$STORE" \
+            -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" | awk '/SHA1:/ {print $2; exit}')
+          if [ -z "$SHA1" ]; then
+            echo "::error::Nel keystore non c'è la chiave '$KEY_ALIAS', o la password è sbagliata."
+            exit 1
+          fi
+          echo "sha1=$SHA1" >> "$GITHUB_OUTPUT"
+          echo "Firma con la chiave '$KEY_ALIAS', SHA-1 $SHA1"
 
       - name: Resolve Flutter SDK
         if: ${{ inputs.runner != 'github' }}
@@ -499,6 +545,9 @@ jobs:
           set -euo pipefail
           # Ogni condizione è un `if` e non un `a && b`: con `set -e` una condizione
           # falsa in coda allo script farebbe uscire il job con exit 1.
+          # Flutter non svuota le cartelle degli output, e sul self-hosted il checkout resta:
+          # senza, un APK per ABI di un run precedente finirebbe fra gli artefatti di questo.
+          rm -rf build/app/outputs/flutter-apk build/app/outputs/bundle
           ARGS=("--${BUILD_MODE}")
           if [ -n "$BUILD_NAME" ]; then ARGS+=("--build-name=$BUILD_NAME"); fi
           if [ -n "$BUILD_NUMBER" ]; then ARGS+=("--build-number=$BUILD_NUMBER"); fi
@@ -542,20 +591,59 @@ jobs:
             echo "path=$FILE" >> "$GITHUB_OUTPUT"
             echo "upload=build/app/outputs/bundle/**/*.aab" >> "$GITHUB_OUTPUT"
           else
-            FILE=$(find build/app/outputs/flutter-apk -name '*.apk' ! -name '*.apk.sha1' | sort | head -1)
-            if [ -z "$FILE" ]; then echo "ERROR: nessun .apk prodotto."; exit 1; fi
-            echo "path=$FILE" >> "$GITHUB_OUTPUT"
+            # Con split_per_abi sono più di uno: `path` li elenca uno per riga, come li
+            # vogliono l'invio su Telegram e il controllo della firma.
+            FILES=$(find build/app/outputs/flutter-apk -name '*.apk' | sort)
+            if [ -z "$FILES" ]; then echo "ERROR: nessun .apk prodotto."; exit 1; fi
+            FILE=$(head -1 <<< "$FILES")
+            { echo "path<<PATHS"; echo "$FILES"; echo "PATHS"; } >> "$GITHUB_OUTPUT"
             echo "upload=build/app/outputs/flutter-apk/*.apk" >> "$GITHUB_OUTPUT"
           fi
           ls -lh "$(dirname "$FILE")" || true
 
+      # L'impronta di ogni file nel riepilogo, da registrare dove serve (Firebase, Google
+      # Sign-In). Se la chiave dei secret c'era e la firma di una release è un'altra, il
+      # progetto non legge android/key.properties: meglio fermarsi che consegnare un APK che
+      # non si installa sopra il precedente. Debug e profile Gradle li firma con la sua chiave
+      # di debug (lo schema di Flutter mette key.properties solo nel buildType release).
+      - name: Signature
+        if: ${{ inputs.platform == 'android' }}
+        env:
+          FILES: ${{ steps.output.outputs.path }}
+          EXPECTED: ${{ inputs.build_mode == 'release' && steps.signing.outputs.sha1 || '' }}
+        run: |
+          set -euo pipefail
+          norm() { tr -d ':' | tr 'A-F' 'a-f'; }
+          WANT=$(printf '%s' "$EXPECTED" | norm)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          { echo "### Firma"; echo "| File | SHA-1 |"; echo "| --- | --- |"; } >> "$GITHUB_STEP_SUMMARY"
+          WRONG=0
+          while IFS= read -r f; do
+            if [ -z "$f" ]; then continue; fi
+            if [ "${f##*.}" = "apk" ]; then
+              SHA1=$("$APKSIGNER" verify --print-certs "$f" | awk -F': ' '/Signer #1 certificate SHA-1 digest/ {print $2; exit}')
+            else
+              SHA1=$("${JAVA_HOME:+$JAVA_HOME/bin/}keytool" -printcert -jarfile "$f" | awk '/SHA1:/ {print $2; exit}')
+            fi
+            SHA1=$(printf '%s' "$SHA1" | norm)
+            echo "| \`$(basename "$f")\` | \`$SHA1\` |" >> "$GITHUB_STEP_SUMMARY"
+            echo "$(basename "$f"): SHA-1 $SHA1"
+            if [ -n "$WANT" ] && [ "$SHA1" != "$WANT" ]; then
+              echo "::error::$(basename "$f") è firmato con $SHA1 invece che con la chiave dei secret ($WANT): il build.gradle del progetto deve leggere android/key.properties."
+              WRONG=1
+            fi
+          done <<< "$FILES"
+          exit "$WRONG"
+
       # La quota di storage degli artifact è dell'org (piano free) e si ricalcola ogni 6-12 h:
       # quando è piena una build riuscita non deve risultare fallita. La consegna vera è il
       # file su Telegram; senza artifact manca solo il pulsante «Rimanda artefatti».
+      # Un wrapper può chiamare il reusable due volte nello stesso run (per ABI e universale):
+      # il nome dell'artifact deve distinguerle, o il secondo upload fallirebbe.
       - uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
-          name: ${{ inputs.app_name }}-${{ inputs.platform }}-${{ inputs.build_mode }}-${{ github.sha }}
+          name: ${{ inputs.app_name }}-${{ inputs.platform }}-${{ inputs.build_mode }}${{ inputs.split_per_abi && '-per-abi' || '' }}-${{ github.sha }}
           path: ${{ steps.output.outputs.upload }}
           retention-days: ${{ inputs.artifact_retention_days }}
 
@@ -573,3 +661,8 @@ jobs:
           status: ${{ job.status }}
           title: ${{ inputs.app_name }} ${{ inputs.platform }} ${{ inputs.build_mode }}
           files: ${{ steps.output.outputs.path }}
+
+      # Sul self-hosted il checkout resta fra i run: le password dei secret non ci restano.
+      - name: Remove signing config
+        if: ${{ always() && steps.signing.outputs.written == 'true' }}
+        run: rm -f android/key.properties

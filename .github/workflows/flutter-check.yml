@@ -80,6 +80,19 @@ jobs:
     env:
       PUB_CACHE: /home/ubuntu/.pub-cache
     steps:
+      # «In corso» con ⏹ Annulla, come le build; l'esito riscrive lo stesso messaggio.
+      - name: Notify start via Telegram
+        id: started
+        if: ${{ inputs.telegram_topic_id != '' }}
+        uses: GabryXnLab/build-kit/notify@main
+        with:
+          run_inputs: ${{ toJSON(github.event.inputs) }}
+          bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          topic_id: ${{ inputs.telegram_topic_id }}
+          status: started
+          title: ${{ inputs.app_name }} verifica
+
       # Niente git clean: la cartella di lavoro è quella di flutter-build dello stesso repo, e
       # il clean toglieva build/, .dart_tool/ e gli intermedi di Gradle, che la build
       # successiva doveva rifare da zero (vedi il checkout di flutter-build).
@@ -149,6 +162,7 @@ jobs:
         if: ${{ always() && inputs.telegram_topic_id != '' }}
         uses: GabryXnLab/build-kit/notify@main
         with:
+          message_id: ${{ steps.started.outputs.message_id }}
           run_inputs: ${{ toJSON(github.event.inputs) }}
           bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}

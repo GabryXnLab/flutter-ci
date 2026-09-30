@@ -61,7 +61,7 @@ on:
         default: '/home/ubuntu/sdk/flutter'
         type: string
       telegram_topic_id:
-        description: 'Topic Telegram per il riepilogo. Vuoto = nessuna notifica (il risultato si legge nel run).'
+        description: 'Topic del supergruppo Telegram in cui pubblicare la notifica (message_thread_id). Vuoto = nessuna notifica (il risultato si legge nel run).'
         required: false
         default: ''
         type: string

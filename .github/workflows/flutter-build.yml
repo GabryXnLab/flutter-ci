@@ -100,8 +100,8 @@ on:
         type: boolean
       max_workers:
         description: >-
-          Worker di Gradle (e di CMake) per questo run. auto = sul self-hosted le CPU libere in
-          quel momento, mai sotto 2; su GitHub tutte | 2 | 4. Stesso input, stessi valori e
+          Worker di Gradle/cargo (e di CMake) per questo run. auto = sul self-hosted le CPU libere
+          in quel momento, mai sotto 2; su GitHub tutte | 2 | 4. Stesso input, stessi valori e
           stesso significato in flutter-ci, expo-ci e desktop-ci (GabryXnLab/build-kit).
         required: false
         default: 'auto'
@@ -174,7 +174,7 @@ on:
         default: 7
         type: number
       telegram_topic_id:
-        description: 'Topic del supergruppo Telegram (message_thread_id). Vuoto = nessuna notifica.'
+        description: 'Topic del supergruppo Telegram in cui pubblicare la notifica (message_thread_id). Vuoto = nessuna notifica.'
         required: false
         default: ''
         type: string

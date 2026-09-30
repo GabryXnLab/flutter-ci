@@ -71,7 +71,7 @@ on:
         default: '/home/ubuntu/sdk/flutter'
         type: string
       telegram_topic_id:
-        description: 'Topic Telegram per il riepilogo. Vuoto = nessuna notifica.'
+        description: 'Topic del supergruppo Telegram in cui pubblicare la notifica (message_thread_id). Vuoto = nessuna notifica.'
         required: false
         default: ''
         type: string
@@ -92,6 +92,19 @@ jobs:
     env:
       PUB_CACHE: /home/ubuntu/.pub-cache
     steps:
+      # «In corso» con ⏹ Annulla, come le build; l'esito riscrive lo stesso messaggio.
+      - name: Notify start via Telegram
+        id: started
+        if: ${{ inputs.telegram_topic_id != '' }}
+        uses: GabryXnLab/build-kit/notify@main
+        with:
+          run_inputs: ${{ toJSON(github.event.inputs) }}
+          bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          topic_id: ${{ inputs.telegram_topic_id }}
+          status: started
+          title: ${{ inputs.app_name }} dipendenze
+
       - uses: actions/checkout@v4
         with:
           submodules: ${{ inputs.has_submodules && 'recursive' || 'false' }}
@@ -221,6 +234,7 @@ jobs:
         if: ${{ always() && inputs.telegram_topic_id != '' }}
         uses: GabryXnLab/build-kit/notify@main
         with:
+          message_id: ${{ steps.started.outputs.message_id }}
           run_inputs: ${{ toJSON(github.event.inputs) }}
           bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}

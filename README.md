@@ -99,6 +99,22 @@ nei secret e la firma di una release è un'altra, la build fallisce invece di co
 si installa sopra il precedente. A fine job `key.properties` si cancella (sul self-hosted
 il checkout resta fra i run).
 
+## Configurazione di chi compila
+
+Due secret facoltativi per ciò che non sta nel repo:
+
+- `GOOGLE_SERVICES_JSON`: il contenuto di `google-services.json`, scritto in
+  `android/app/` (solo Android) e tolto a fine job;
+- `DART_DEFINES`: come l'input `dart_defines` (coppie `CHIAVE=valore` separate da spazi),
+  per i valori da non scrivere nel wrapper. Un secret non si può passare in `with:`, ma
+  sì comporre nel blocco `secrets:` del wrapper:
+
+```yaml
+    secrets:
+      GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+      DART_DEFINES: SENTRY_DSN=${{ secrets.SENTRY_DSN }}
+```
+
 ## Perché non è un submodule
 
 Un reusable workflow GitHub **deve** stare in `.github/workflows/` di un repository e si

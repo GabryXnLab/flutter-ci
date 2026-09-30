@@ -204,6 +204,14 @@ on:
       # rifiuterebbe l impronta.
       ANDROID_DEBUG_KEYSTORE:
         required: false
+      # Il google-services.json del progetto Firebase di chi compila (solo platform=android):
+      # scritto in android/app/ e tolto a fine job. Vuoto = nessun file, come oggi.
+      GOOGLE_SERVICES_JSON:
+        required: false
+      # Come l input dart_defines, per i valori che non vanno scritti nel wrapper (es.
+      # "SENTRY_DSN=https://…"): in `with:` il contesto secrets non c'è.
+      DART_DEFINES:
+        required: false
 
 jobs:
   build:
@@ -362,6 +370,19 @@ jobs:
           fi
           echo "sha1=$SHA1" >> "$GITHUB_OUTPUT"
           echo "Firma con la chiave '$KEY_ALIAS', SHA-1 $SHA1"
+
+      - name: Firebase config
+        id: firebase
+        if: ${{ inputs.platform == 'android' }}
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+            echo "written=true" >> "$GITHUB_OUTPUT"
+            echo "google-services.json dal secret GOOGLE_SERVICES_JSON."
+          fi
 
       - name: Resolve Flutter SDK
         if: ${{ inputs.runner != 'github' }}
@@ -541,6 +562,7 @@ jobs:
           BUILD_NAME: ${{ inputs.build_name }}
           BUILD_NUMBER: ${{ inputs.build_number }}
           DART_DEFINES: ${{ inputs.dart_defines }}
+          SECRET_DART_DEFINES: ${{ secrets.DART_DEFINES }}
         run: |
           set -euo pipefail
           # Ogni condizione è un `if` e non un `a && b`: con `set -e` una condizione
@@ -551,7 +573,7 @@ jobs:
           ARGS=("--${BUILD_MODE}")
           if [ -n "$BUILD_NAME" ]; then ARGS+=("--build-name=$BUILD_NAME"); fi
           if [ -n "$BUILD_NUMBER" ]; then ARGS+=("--build-number=$BUILD_NUMBER"); fi
-          for d in $DART_DEFINES; do ARGS+=("--dart-define=$d"); done
+          for d in $DART_DEFINES $SECRET_DART_DEFINES; do ARGS+=("--dart-define=$d"); done
 
           if [ "$PLATFORM" = "linux" ]; then
             flutter build linux "${ARGS[@]}"
@@ -662,7 +684,12 @@ jobs:
           title: ${{ inputs.app_name }} ${{ inputs.platform }} ${{ inputs.build_mode }}
           files: ${{ steps.output.outputs.path }}
 
-      # Sul self-hosted il checkout resta fra i run: le password dei secret non ci restano.
-      - name: Remove signing config
-        if: ${{ always() && steps.signing.outputs.written == 'true' }}
-        run: rm -f android/key.properties
+      # Sul self-hosted il checkout resta fra i run: i file scritti dai secret non ci restano.
+      - name: Remove files from secrets
+        if: ${{ always() && (steps.signing.outputs.written == 'true' || steps.firebase.outputs.written == 'true') }}
+        env:
+          SIGNING: ${{ steps.signing.outputs.written }}
+          FIREBASE: ${{ steps.firebase.outputs.written }}
+        run: |
+          if [ "$SIGNING" = "true" ]; then rm -f android/key.properties; fi
+          if [ "$FIREBASE" = "true" ]; then rm -f android/app/google-services.json; fi

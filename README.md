@@ -13,6 +13,7 @@
   <img src="https://img.shields.io/badge/GitHub%20Actions-reusable%20workflow-2088FF?logo=githubactions&logoColor=white" alt="Reusable workflow">
   <img src="https://img.shields.io/badge/runner-self--hosted%20ARM64%20%7C%20GitHub-4B5563" alt="Runner: self-hosted ARM64 o GitHub">
   <a href="https://github.com/GabryXnLab/kagami/actions/workflows/build.yml"><img src="https://github.com/GabryXnLab/kagami/actions/workflows/build.yml/badge.svg?branch=main" alt="Build di Kagami con flutter-ci"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licenza-Apache%202.0-blue" alt="Licenza Apache 2.0"></a>
   <a href="https://github.com/GabryXnLab/flutter-ci/commits/main"><img src="https://img.shields.io/github/last-commit/GabryXnLab/flutter-ci?label=ultimo%20commit" alt="Ultimo commit"></a>
 </p>
 
@@ -288,4 +289,4 @@ Il repo è pubblico e chiunque può chiamare questi workflow. Cosa sapere:
 
 ## Licenza
 
-Il repo non ha ancora un file di licenza: il codice è visibile e i workflow si possono chiamare, ma non è concesso esplicitamente in licenza.
+Distribuito con licenza [Apache 2.0](LICENSE): si può usare, copiare e adattare, anche in progetti commerciali, mantenendo l'avviso di licenza e segnalando i file modificati.

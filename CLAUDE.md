@@ -112,6 +112,11 @@ gh workflow list --repo GabryXnLab/<progetto>   # i wrapper che chiamano questi 
   il job riesce, altrimenti messaggio con il pulsante «🔁 Rilancia». Token e chat arrivano
   dai secret del chiamante; senza (repo pubblico, fork) non parte niente. Server locale a
   2 GB, topic come campo a parte e formato del messaggio stanno lì, non qui.
+- **`flutter-check.yml` non pulisce il checkout sul self-hosted, `flutter-update.yml` sì.**
+  La cartella di lavoro è la stessa di `flutter-build.yml`, e il clean ne cancellava gli
+  intermedi. L'update però committa con `git add -A`: su un checkout non pulito un file
+  rimasto da un'altra build (es. `android/key.properties` di un job interrotto) finirebbe
+  nel commit.
 - **`flutter-update.yml` non è un OTA.** In Flutter il codice Dart è AOT dentro l'APK:
   non esiste un aggiornamento che non passi da una nuova build. Quel workflow aggiorna le
   **dipendenze** e committa il lockfile; l'APK lo rifà `flutter-build.yml`.

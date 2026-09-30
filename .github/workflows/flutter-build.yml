@@ -328,13 +328,29 @@ jobs:
           CPUS=$(nproc)
           MEM_GB=$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 1024 / 1024 ))
           echo "Runner: $CPUS CPU, ${MEM_GB} GB di RAM"
+          df -h / /mnt 2>/dev/null || df -h /
+          # Il disco del runner è piccolo (run 36681640161: «No space left on device» a metà
+          # build, con 8 GB di swap sullo stesso disco): via i toolchain preinstallati che una
+          # build Flutter non usa. Il runner è usa e getta, e rm costa pochi secondi.
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost \
+            /opt/hostedtoolcache/CodeQL /usr/local/julia* /usr/share/swift
+          # Lo swap va dove c'è più spazio, e mai oltre metà di quello libero.
           if [ -z "$(swapon --show --noheadings)" ] || [ "$MEM_GB" -lt 12 ]; then
-            sudo fallocate -l 8G /mnt/flutter-ci.swap
-            sudo chmod 600 /mnt/flutter-ci.swap
-            sudo mkswap /mnt/flutter-ci.swap >/dev/null
-            sudo swapon /mnt/flutter-ci.swap
+            DIR=/mnt
+            FREE_MNT=$(df -BG --output=avail /mnt 2>/dev/null | tail -1 | tr -dc 0-9)
+            FREE_ROOT=$(df -BG --output=avail / | tail -1 | tr -dc 0-9)
+            if [ "${FREE_MNT:-0}" -lt "$FREE_ROOT" ]; then DIR=$HOME; fi
+            FREE=$(df -BG --output=avail "$DIR" | tail -1 | tr -dc 0-9)
+            SWAP=$(( FREE / 2 < 8 ? FREE / 2 : 8 ))
+            if [ "$SWAP" -ge 2 ]; then
+              sudo fallocate -l "${SWAP}G" "$DIR/flutter-ci.swap"
+              sudo chmod 600 "$DIR/flutter-ci.swap"
+              sudo mkswap "$DIR/flutter-ci.swap" >/dev/null
+              sudo swapon "$DIR/flutter-ci.swap"
+            fi
           fi
           swapon --show
+          df -h / /mnt 2>/dev/null || df -h /
           if [ "$MEM_GB" -lt 12 ]; then
             mkdir -p "$HOME/.gradle"
             {

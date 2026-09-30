@@ -18,7 +18,7 @@ step sono bash (`set -euo pipefail`) e, dove serve parsare, `python3` del sistem
 
 ```text
 .github/workflows/
-  flutter-build.yml   APK/AAB Android o bundle Linux, artifact + invio Telegram
+  flutter-build.yml   APK/AAB Android, bundle Linux o IPA iOS non firmato, artifact + invio Telegram
   flutter-update.yml  flutter pub upgrade, verifica, commit del lockfile
   flutter-check.yml   format, analyze, test, pacchetti Dart puri (`dart_packages`), controllo del codice generato
 docs/
@@ -56,6 +56,11 @@ gh workflow list --repo GabryXnLab/<progetto>   # i wrapper che chiamano questi 
   step «Fit Gradle to the runner» abbassa la memoria di Gradle e Kotlin sotto i 12 GB
   (i valori dei progetti sono per nexus-core: il primo run su GitHub è stato spento per
   memoria esaurita) e aggiunge swap; Gradle e l'SDK sono in cache fra i run.
+- **iOS solo sul macOS di GitHub, e senza firma.** `platform: ios` vuole `runner:
+  github` (`macos-latest`); con il self-hosted il job resta su nexus-core e si ferma al
+  primo step, invece di accendere un runner macOS solo per l'errore. Niente account Apple
+  Developer: `--no-codesign` e un IPA con `Payload/<App>.app`, che firma chi lo installa
+  (AltStore, Sideloadly). Java, Gradle e i secret di Android lì non servono e si saltano.
 - **L'SDK Flutter non si scarica in CI** sul self-hosted. Il runner è ARM64 e la tarball ufficiale esiste
   solo per x86-64: sotto QEMU `dart` va in `SIGSEGV`. L'SDK è un clone git in
   `/home/ubuntu/sdk/flutter` e i workflow si limitano a verificarlo e metterlo in `PATH`.

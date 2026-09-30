@@ -9,7 +9,7 @@ schema, un repo centrale con la logica e thin wrapper nei progetti.
 
 | Workflow | Cosa fa |
 | :--- | :--- |
-| `flutter-build.yml` | APK/AAB Android o bundle Linux desktop, artifact del run + invio su Telegram |
+| `flutter-build.yml` | APK/AAB Android, bundle Linux desktop o IPA iOS non firmato, artifact del run + invio su Telegram |
 | `flutter-update.yml` | `flutter pub upgrade` con verifica e commit del lockfile |
 | `flutter-check.yml` | formato, analisi statica, test, pacchetti Dart puri (`dart_packages`), controllo del codice generato |
 
@@ -98,6 +98,27 @@ Dopo la build il riepilogo del run ha la SHA-1 di ogni file prodotto; se c'era u
 nei secret e la firma di una release è un'altra, la build fallisce invece di consegnare un APK che non
 si installa sopra il precedente. A fine job `key.properties` si cancella (sul self-hosted
 il checkout resta fra i run).
+
+## iOS: IPA non firmato
+
+`platform: ios` compila su `macos-latest`, quindi solo con `runner: github` (con il
+self-hosted il job si ferma subito con un errore). `flutter build ios --release
+--no-codesign`, poi `Payload/<App>.app` zippato in `<app_name>-ios-<build_mode>-unsigned.ipa`,
+artifact del run e file su Telegram. Senza firma: lo firma chi lo installa, con AltStore
+o Sideloadly e il proprio Apple ID, quindi non serve un account Apple Developer. I plugin
+li risolve Flutter (Swift Package Manager, o CocoaPods per chi non lo supporta);
+deployment target e `Podfile`, se servono, sono del progetto. In un repo privato un
+minuto macOS vale dieci minuti Linux; nei repo pubblici i minuti sono gratis.
+
+```yaml
+  ios:
+    uses: GabryXnLab/flutter-ci/.github/workflows/flutter-build.yml@main
+    with:
+      app_name: Kagami
+      runner: github
+      platform: ios
+      flutter_version: '3.47.4'
+```
 
 ## Configurazione di chi compila
 

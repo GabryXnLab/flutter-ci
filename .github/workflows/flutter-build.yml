@@ -1,11 +1,12 @@
 name: Flutter Build (reusable)
 
 # Workflow riusabile per le build Flutter: di norma sul runner self-hosted `nexus-core`
-# (ARM64), a scelta (`runner: github`) su un runner x86-64 di GitHub.
+# (ARM64), a scelta (`runner: github`) su un runner x86-64 di GitHub; iOS solo su un
+# runner macOS di GitHub.
 # Chiamato dai thin wrapper dei progetti via:
 #   uses: GabryXnLab/flutter-ci/.github/workflows/flutter-build.yml@main
 #
-# Produce un APK, un AAB o un bundle Linux desktop, lo carica come artifact del run
+# Produce un APK, un AAB, un bundle Linux desktop o un IPA iOS non firmato, lo carica come artifact del run
 # e lo manda nel topic Telegram indicato. Tutta la logica sta qui: nei progetti
 # restano solo le scelte.
 
@@ -33,7 +34,10 @@ on:
         default: ''
         type: string
       platform:
-        description: 'android = APK/AAB per il telefono | linux = bundle desktop ARM64 (utile per provare la UI senza telefono)'
+        description: >-
+          android = APK/AAB per il telefono | linux = bundle desktop ARM64 (utile per provare la
+          UI senza telefono) | ios = IPA non firmato da installare con AltStore o Sideloadly,
+          solo con runner=github (macos-latest).
         required: false
         default: 'android'
         type: string
@@ -215,8 +219,10 @@ on:
 
 jobs:
   build:
-    name: ${{ inputs.app_name }} · ${{ inputs.platform }} ${{ inputs.build_mode }}
-    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "nexus-core"]') }}
+    name: ${{ inputs.app_name }} · ${{ inputs.platform }} ${{ inputs.build_mode }}${{ inputs.split_per_abi && ' · per ABI' || '' }}
+    # iOS con self-hosted resta sul self-hosted e si ferma al primo step: un runner macOS
+    # costa dieci volte i minuti di uno Linux, e non va acceso solo per dire l errore.
+    runs-on: ${{ inputs.runner == 'github' && (inputs.platform == 'ios' && 'macos-latest' || 'ubuntu-latest') || fromJSON('["self-hosted", "nexus-core"]') }}
     steps:
       # «In corso» con ⏹ Annulla; lo step finale riscrive lo stesso messaggio. Senza i secret
       # di Telegram (repo pubblico, fork) l azione non manda niente.
@@ -230,6 +236,23 @@ jobs:
           topic_id: ${{ inputs.telegram_topic_id }}
           status: started
           title: ${{ inputs.app_name }} ${{ inputs.platform }} ${{ inputs.build_mode }}
+
+      - name: Check inputs
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          RUNNER_KIND: ${{ inputs.runner }}
+        run: |
+          set -euo pipefail
+          case "$PLATFORM" in
+            android|linux) ;;
+            ios)
+              if [ "$RUNNER_KIND" != "github" ]; then
+                echo "::error::platform=ios compila solo su macOS: serve runner=github (macos-latest). Il self-hosted è Linux."
+                exit 1
+              fi ;;
+            *) echo "::error::platform non valida: '$PLATFORM' (attese: android | linux | ios)"; exit 1 ;;
+          esac
+
       # Sul self-hosted il checkout non pulisce: `git clean -ffdx` toglieva build/,
       # .dart_tool/, android/.gradle e android/.kotlin, e ogni run ricompilava da zero
       # Kotlin e Java di tutti i plugin, il nativo e R8 (su Kagami ~5 minuti dopo la
@@ -266,14 +289,14 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Set up Java (GitHub runner)
-        if: ${{ inputs.runner == 'github' }}
+        if: ${{ inputs.runner == 'github' && inputs.platform != 'ios' }}
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # Su un runner x86-64 la tarball ufficiale va bene: il divieto di scaricare l SDK
-      # vale solo per nexus-core, che è ARM64.
+      # Su un runner x86-64 (e sul macOS di GitHub) la tarball ufficiale va bene: il divieto
+      # di scaricare l SDK vale solo per nexus-core, che è Linux ARM64.
       - name: Set up Flutter (GitHub runner)
         if: ${{ inputs.runner == 'github' }}
         uses: subosito/flutter-action@v2
@@ -569,7 +592,7 @@ jobs:
           # falsa in coda allo script farebbe uscire il job con exit 1.
           # Flutter non svuota le cartelle degli output, e sul self-hosted il checkout resta:
           # senza, un APK per ABI di un run precedente finirebbe fra gli artefatti di questo.
-          rm -rf build/app/outputs/flutter-apk build/app/outputs/bundle
+          rm -rf build/app/outputs/flutter-apk build/app/outputs/bundle build/ios/ipa
           ARGS=("--${BUILD_MODE}")
           if [ -n "$BUILD_NAME" ]; then ARGS+=("--build-name=$BUILD_NAME"); fi
           if [ -n "$BUILD_NUMBER" ]; then ARGS+=("--build-number=$BUILD_NUMBER"); fi
@@ -577,6 +600,11 @@ jobs:
 
           if [ "$PLATFORM" = "linux" ]; then
             flutter build linux "${ARGS[@]}"
+          elif [ "$PLATFORM" = "ios" ]; then
+            # Senza un account Apple Developer non c'è firma: l'app la firma chi la installa
+            # (AltStore, Sideloadly) con il proprio Apple ID. I plugin li risolve Flutter (Swift
+            # Package Manager, o `pod install` per quelli che non lo supportano).
+            flutter build ios "${ARGS[@]}" --no-codesign
           else
             if [ -n "$TARGET_PLATFORM" ]; then ARGS+=("--target-platform=$TARGET_PLATFORM"); fi
             if [ "$ARTIFACT" = "aab" ]; then
@@ -607,6 +635,18 @@ jobs:
             echo "path=$TARBALL" >> "$GITHUB_OUTPUT"
             echo "upload=$BUNDLE" >> "$GITHUB_OUTPUT"
             FILE="$TARBALL"
+          elif [ "$PLATFORM" = "ios" ]; then
+            APP=$(find build/ios/iphoneos -maxdepth 1 -name '*.app' | head -1)
+            if [ -z "$APP" ]; then echo "ERROR: nessun .app in build/ios/iphoneos."; exit 1; fi
+            # Un .ipa è uno zip con l'app in Payload/: la forma che AltStore e Sideloadly
+            # aprono e firmano. -y tiene i symlink dei framework come symlink.
+            FILE="build/ios/ipa/${APP_NAME}-ios-${BUILD_MODE}-unsigned.ipa"
+            mkdir -p build/ios/ipa/Payload
+            cp -R "$APP" build/ios/ipa/Payload/
+            (cd build/ios/ipa && zip -qry "$(basename "$FILE")" Payload)
+            rm -rf build/ios/ipa/Payload
+            echo "path=$FILE" >> "$GITHUB_OUTPUT"
+            echo "upload=$FILE" >> "$GITHUB_OUTPUT"
           elif [ "$ARTIFACT" = "aab" ]; then
             FILE=$(find build/app/outputs/bundle -name '*.aab' | head -1)
             if [ -z "$FILE" ]; then echo "ERROR: nessun .aab prodotto."; exit 1; fi

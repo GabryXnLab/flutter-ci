@@ -80,8 +80,12 @@ jobs:
     env:
       PUB_CACHE: /home/ubuntu/.pub-cache
     steps:
+      # Niente git clean: la cartella di lavoro è quella di flutter-build dello stesso repo, e
+      # il clean toglieva build/, .dart_tool/ e gli intermedi di Gradle, che la build
+      # successiva doveva rifare da zero (vedi il checkout di flutter-build).
       - uses: actions/checkout@v4
         with:
+          clean: false
           ref: ${{ inputs.ref }}
           submodules: ${{ inputs.has_submodules && 'recursive' || 'false' }}
           token: ${{ secrets.SUBMODULES_TOKEN || github.token }}

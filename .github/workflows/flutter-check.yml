@@ -55,6 +55,21 @@ on:
         required: false
         default: ''
         type: string
+      runner:
+        description: >-
+          self-hosted = nexus-core (default: SDK e pub cache già caldi, nessun minuto Actions) |
+          github = ubuntu-latest, quando nexus-core non deve prendere altro carico. Su GitHub
+          l SDK Flutter si scarica (flutter_version), con SDK e pub cache nella cache di GitHub.
+        required: false
+        default: 'self-hosted'
+        type: string
+      flutter_version:
+        description: >-
+          Solo con runner=github: la versione Flutter da scaricare (es. 3.47.4), la stessa del
+          clone sul runner self-hosted. Vuoto = l ultima stable.
+        required: false
+        default: ''
+        type: string
       flutter_sdk:
         description: 'Percorso dell SDK Flutter sul runner (clone git: la tarball ufficiale è solo x86-64).'
         required: false
@@ -76,9 +91,7 @@ on:
 jobs:
   check:
     name: ${{ inputs.app_name }} · verifica
-    runs-on: [self-hosted, nexus-core]
-    env:
-      PUB_CACHE: /home/ubuntu/.pub-cache
+    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "nexus-core"]') }}
     steps:
       # «In corso» con ⏹ Annulla, come le build; l'esito riscrive lo stesso messaggio.
       - name: Notify start via Telegram
@@ -93,17 +106,35 @@ jobs:
           status: started
           title: ${{ inputs.app_name }} verifica
 
-      # Niente git clean: la cartella di lavoro è quella di flutter-build dello stesso repo, e
-      # il clean toglieva build/, .dart_tool/ e gli intermedi di Gradle, che la build
-      # successiva doveva rifare da zero (vedi il checkout di flutter-build).
+      # Sul self-hosted niente git clean: la cartella di lavoro è quella di flutter-build dello
+      # stesso repo, e il clean toglieva build/, .dart_tool/ e gli intermedi di Gradle, che la
+      # build successiva doveva rifare da zero (vedi il checkout di flutter-build).
       - uses: actions/checkout@v4
         with:
-          clean: false
+          clean: ${{ inputs.runner == 'github' }}
           ref: ${{ inputs.ref }}
           submodules: ${{ inputs.has_submodules && 'recursive' || 'false' }}
           token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
 
+      # Sul self-hosted la pub cache della macchina, scritta qui e non come `env:` di job, che
+      # non si può omettere a condizione: su GitHub vale quella del runner (flutter-build fa
+      # lo stesso). Fissa, perché due job concorrenti non si contendano quella di $HOME.
+      - name: Configure self-hosted environment
+        if: ${{ inputs.runner != 'github' }}
+        run: echo "PUB_CACHE=/home/ubuntu/.pub-cache" >> "$GITHUB_ENV"
+
+      # Su un runner x86-64 la tarball ufficiale va bene: il divieto di scaricare l SDK vale
+      # solo per nexus-core, che è Linux ARM64.
+      - name: Set up Flutter (GitHub runner)
+        if: ${{ inputs.runner == 'github' }}
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ inputs.flutter_version }}
+          cache: true
+
       - name: Resolve Flutter SDK
+        if: ${{ inputs.runner != 'github' }}
         env:
           FLUTTER_SDK: ${{ inputs.flutter_sdk }}
         run: |
@@ -113,6 +144,12 @@ jobs:
             exit 1
           fi
           echo "$FLUTTER_SDK/bin" >> "$GITHUB_PATH"
+
+      # Il pezzo comune a tutte le build (GabryXnLab/build-kit): worker e cache condivise.
+      - name: Tune build
+        uses: GabryXnLab/build-kit/setup@main
+        with:
+          runner: ${{ inputs.runner }}
 
       - name: Install dependencies
         run: |

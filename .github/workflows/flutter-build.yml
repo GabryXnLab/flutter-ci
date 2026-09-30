@@ -705,14 +705,14 @@ jobs:
             if [ -z "$f" ]; then continue; fi
             if [ "${f##*.}" = "apk" ]; then
               CERTS=$("$APKSIGNER" verify --print-certs "$f")
-              SHA1=$(awk -F': ' '/certificate SHA-1 digest/ {print $2; exit}' <<< "$CERTS" | norm)
-              SHA256=$(awk -F': ' '/certificate SHA-256 digest/ {print $2; exit}' <<< "$CERTS" | norm)
+              SHA1=$(awk '/certificate SHA-1 digest/ {print $NF; exit}' <<< "$CERTS" | norm)
+              SHA256=$(awk '/certificate SHA-256 digest/ {print $NF; exit}' <<< "$CERTS" | norm)
             else
               CERTS=$("${JAVA_HOME:+$JAVA_HOME/bin/}keytool" -printcert -jarfile "$f")
               SHA1=$(awk '/SHA1:/ {print $2; exit}' <<< "$CERTS" | norm)
               SHA256=$(awk '/SHA256:/ {print $2; exit}' <<< "$CERTS" | norm)
             fi
-            if [ -z "$SHA256" ]; then
+            if ! [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]]; then
               echo "$CERTS"
               echo "::error::$(basename "$f"): impronta della firma non trovata nell'output qui sopra."
               WRONG=1

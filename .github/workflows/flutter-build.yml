@@ -194,10 +194,11 @@ jobs:
     name: ${{ inputs.app_name }} · ${{ inputs.platform }} ${{ inputs.build_mode }}
     runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "nexus-core"]') }}
     steps:
-      # «In corso» con ⏹ Annulla (ci-bot); lo step finale riscrive lo stesso messaggio.
+      # «In corso» con ⏹ Annulla; lo step finale riscrive lo stesso messaggio. Senza i secret
+      # di Telegram (repo pubblico, fork) l azione non manda niente.
       - name: Notify start via Telegram
         id: started
-        uses: GabryXnLab/ci-bot/notify@main
+        uses: GabryXnLab/build-kit/notify@main
         with:
           run_inputs: ${{ toJSON(github.event.inputs) }}
           bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -558,11 +559,11 @@ jobs:
           path: ${{ steps.output.outputs.upload }}
           retention-days: ${{ inputs.artifact_retention_days }}
 
-      # Esito sempre (azione e bot in GabryXnLab/ci-bot): l'artefatto se il job riesce,
+      # Esito sempre (azione in GabryXnLab/build-kit, bot ci-bot): l'artefatto se il job riesce,
       # altrimenti il pulsante per rilanciare il run. Best-effort.
       - name: Notify via Telegram
         if: ${{ always() }}
-        uses: GabryXnLab/ci-bot/notify@main
+        uses: GabryXnLab/build-kit/notify@main
         with:
           message_id: ${{ steps.started.outputs.message_id }}
           run_inputs: ${{ toJSON(github.event.inputs) }}

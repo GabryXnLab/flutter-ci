@@ -100,10 +100,11 @@ gh workflow list --repo GabryXnLab/<progetto>   # i wrapper che chiamano questi 
   input `signing_keystore` come in `expo-ci`, con il keystore sul runner in
   `/home/ubuntu/secrets/` e la verifica dell'impronta dopo la build — non prima che
   serva.
-- **La notifica Telegram passa dall'azione `GabryXnLab/ci-bot/notify@main`** (bot
-  `@BobCI_bot` dedicato alla CI): best-effort, artefatto o riepilogo se il job riesce,
-  altrimenti messaggio con il pulsante «🔁 Rilancia». Server locale a 2 GB, topic come campo
-  a parte e formato del messaggio stanno lì, non qui: vedi `CLAUDE.md` di `ci-bot`.
+- **La notifica Telegram passa dall'azione `GabryXnLab/build-kit/notify@main`**, copia
+  pubblica di quella di `ci-bot` (che resta privato): best-effort, artefatto o riepilogo se
+  il job riesce, altrimenti messaggio con il pulsante «🔁 Rilancia». Token e chat arrivano
+  dai secret del chiamante; senza (repo pubblico, fork) non parte niente. Server locale a
+  2 GB, topic come campo a parte e formato del messaggio stanno lì, non qui.
 - **`flutter-update.yml` non è un OTA.** In Flutter il codice Dart è AOT dentro l'APK:
   non esiste un aggiornamento che non passi da una nuova build. Quel workflow aggiorna le
   **dipendenze** e committa il lockfile; l'APK lo rifà `flutter-build.yml`.

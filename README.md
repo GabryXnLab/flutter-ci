@@ -74,6 +74,11 @@ self-hosted girano due runner (`nexus-core`, `nexus-core-2`), quindi due build i
 niente della tabella serve: il JDK 17 lo mette `actions/setup-java`, l'SDK Flutter
 `subosito/flutter-action` (x86-64, quindi la tarball ufficiale va bene) alla versione di
 `flutter_version`, e l'AOT non passa da QEMU. Consuma minuti Actions.
+`flutter-check.yml` e `flutter-update.yml` hanno lo stesso input `runner` (con
+`flutter_version`); `upgrade_sdk` di `flutter-update.yml` vale solo sul self-hosted.
+
+Un runner GitHub è nuovo a ogni job: SDK e pub cache (`flutter-action`, `cache: true`) e
+Gradle (`gradle/actions/setup-gradle`) passano dalla cache di GitHub, che è per repo.
 
 Il wrapper espone la scelta come input `choice` e passa `runner`, `flutter_version` e i
 secret della firma.

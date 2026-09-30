@@ -104,7 +104,7 @@ gh workflow list --repo GabryXnLab/<progetto>   # i wrapper che chiamano questi 
   `apksigner`). Il keystore dei secret (`ANDROID_KEYSTORE*`, o `ANDROID_DEBUG_KEYSTORE` su
   GitHub per compatibilità) va in `RUNNER_TEMP`, `key.properties` nel checkout e si
   cancella a fine job. È il progetto a doverlo leggere nel suo `build.gradle`: per questo,
-  con una chiave nei secret, lo step «Signature» confronta la SHA-1 di ogni release con quella
+  con una chiave nei secret, lo step «Signature» confronta la SHA-256 di ogni release con quella
   della chiave e fallisce se sono diverse. Senza secret, sul self-hosted resta la chiave
   della macchina.
 - **La notifica Telegram passa dall'azione `GabryXnLab/build-kit/notify@main`**, copia

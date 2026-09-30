@@ -94,7 +94,7 @@ GabryXnLab/<progetto>`) arriva a Gradle da `android/key.properties`, lo schema d
 [documentazione di Flutter](https://docs.flutter.dev/deployment/android#configure-signing-in-gradle):
 **il `build.gradle` del progetto deve leggerlo**. Copiarlo in `~/.android/debug.keystore`
 non basta, perché sui runner di GitHub Gradle ignora quel file e ne genera un altro.
-Dopo la build il riepilogo del run ha la SHA-1 di ogni file prodotto; se c'era una chiave
+Dopo la build il riepilogo del run ha SHA-1 e SHA-256 di ogni file prodotto; se c'era una chiave
 nei secret e la firma di una release è un'altra, la build fallisce invece di consegnare un APK che non
 si installa sopra il precedente. A fine job `key.properties` si cancella (sul self-hosted
 il checkout resta fra i run).

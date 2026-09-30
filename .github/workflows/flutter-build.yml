@@ -401,13 +401,16 @@ jobs:
             echo "keyPassword=$KEY_PASSWORD"
           } > android/key.properties
           echo "written=true" >> "$GITHUB_OUTPUT"
-          SHA1=$("${JAVA_HOME:+$JAVA_HOME/bin/}keytool" -list -v -keystore "$STORE" \
-            -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" | awk '/SHA1:/ {print $2; exit}')
-          if [ -z "$SHA1" ]; then
+          CERT=$("${JAVA_HOME:+$JAVA_HOME/bin/}keytool" -list -v -keystore "$STORE" \
+            -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" || true)
+          SHA1=$(awk '/SHA1:/ {print $2; exit}' <<< "$CERT")
+          SHA256=$(awk '/SHA256:/ {print $2; exit}' <<< "$CERT")
+          if [ -z "$SHA256" ]; then
             echo "::error::Nel keystore non c'è la chiave '$KEY_ALIAS', o la password è sbagliata."
             exit 1
           fi
           echo "sha1=$SHA1" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
           echo "Firma con la chiave '$KEY_ALIAS', SHA-1 $SHA1"
 
       - name: Firebase config
@@ -688,26 +691,37 @@ jobs:
         if: ${{ inputs.platform == 'android' }}
         env:
           FILES: ${{ steps.output.outputs.path }}
-          EXPECTED: ${{ inputs.build_mode == 'release' && steps.signing.outputs.sha1 || '' }}
+          EXPECTED: ${{ inputs.build_mode == 'release' && steps.signing.outputs.sha256 || '' }}
         run: |
           set -euo pipefail
-          norm() { tr -d ':' | tr 'A-F' 'a-f'; }
+          norm() { tr -d ': ' | tr 'A-F' 'a-f'; }
+          # Si confronta la SHA-256: apksigner la stampa sempre, la SHA-1 non in ogni versione.
           WANT=$(printf '%s' "$EXPECTED" | norm)
-          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
-          { echo "### Firma"; echo "| File | SHA-1 |"; echo "| --- | --- |"; } >> "$GITHUB_STEP_SUMMARY"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          echo "apksigner: $APKSIGNER"
+          { echo "### Firma"; echo "| File | SHA-1 | SHA-256 |"; echo "| --- | --- | --- |"; } >> "$GITHUB_STEP_SUMMARY"
           WRONG=0
           while IFS= read -r f; do
             if [ -z "$f" ]; then continue; fi
             if [ "${f##*.}" = "apk" ]; then
-              SHA1=$("$APKSIGNER" verify --print-certs "$f" | awk -F': ' '/Signer #1 certificate SHA-1 digest/ {print $2; exit}')
+              CERTS=$("$APKSIGNER" verify --print-certs "$f")
+              SHA1=$(awk -F': ' '/certificate SHA-1 digest/ {print $2; exit}' <<< "$CERTS" | norm)
+              SHA256=$(awk -F': ' '/certificate SHA-256 digest/ {print $2; exit}' <<< "$CERTS" | norm)
             else
-              SHA1=$("${JAVA_HOME:+$JAVA_HOME/bin/}keytool" -printcert -jarfile "$f" | awk '/SHA1:/ {print $2; exit}')
+              CERTS=$("${JAVA_HOME:+$JAVA_HOME/bin/}keytool" -printcert -jarfile "$f")
+              SHA1=$(awk '/SHA1:/ {print $2; exit}' <<< "$CERTS" | norm)
+              SHA256=$(awk '/SHA256:/ {print $2; exit}' <<< "$CERTS" | norm)
             fi
-            SHA1=$(printf '%s' "$SHA1" | norm)
-            echo "| \`$(basename "$f")\` | \`$SHA1\` |" >> "$GITHUB_STEP_SUMMARY"
-            echo "$(basename "$f"): SHA-1 $SHA1"
-            if [ -n "$WANT" ] && [ "$SHA1" != "$WANT" ]; then
-              echo "::error::$(basename "$f") è firmato con $SHA1 invece che con la chiave dei secret ($WANT): il build.gradle del progetto deve leggere android/key.properties."
+            if [ -z "$SHA256" ]; then
+              echo "$CERTS"
+              echo "::error::$(basename "$f"): impronta della firma non trovata nell'output qui sopra."
+              WRONG=1
+              continue
+            fi
+            echo "| \`$(basename "$f")\` | \`$SHA1\` | \`$SHA256\` |" >> "$GITHUB_STEP_SUMMARY"
+            echo "$(basename "$f"): SHA-1 ${SHA1:-?}, SHA-256 $SHA256"
+            if [ -n "$WANT" ] && [ "$SHA256" != "$WANT" ]; then
+              echo "::error::$(basename "$f") è firmato con un'altra chiave (SHA-256 $SHA256, attesa $WANT): il build.gradle del progetto deve leggere android/key.properties."
               WRONG=1
             fi
           done <<< "$FILES"

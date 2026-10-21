@@ -22,10 +22,33 @@ on:
           self-hosted = nexus-core (default: SDK, pub cache e Gradle già caldi, nessun minuto
           Actions) | github = ubuntu-latest, quando nexus-core non deve prendere altro carico.
           Su GitHub l SDK Flutter si scarica (x86-64, niente QEMU) e la chiave di firma
-          arriva dai secret ANDROID_KEYSTORE* (o ANDROID_DEBUG_KEYSTORE).
+          arriva dai secret RELEASE_KEYSTORE_* (o ANDROID_KEYSTORE*, ANDROID_DEBUG_KEYSTORE) |
+          auto = sceglie GabryXnLab/build-kit/pick-runner: nexus-core se libero, poi ohos, poi un
+          runner effimero Ubicloud (serve il secret RUNNER_PICK_TOKEN; senza, nexus-core).
         required: false
         default: 'self-hosted'
         type: string
+      allow:
+        description: >-
+          Solo con runner=auto: i livelli ammessi, in virgola (nexus,ohos,ubicloud). Serve a
+          provare un livello: «ubicloud» forza il runner a pagamento. Senza una chiave di firma
+          nei secret l elenco si riduce a «nexus», perché un runner nuovo firmerebbe con una chiave nuova.
+        required: false
+        default: 'nexus,ohos,ubicloud'
+        type: string
+      ubicloud_size:
+        description: 'Solo con runner=auto: vCPU del runner Ubicloud (ubicloud-standard-N).'
+        required: false
+        default: '8'
+        type: string
+      remote_cache:
+        description: >-
+          true = cache remota (Gradle) sul bucket OCI anche fuori da runner=auto. Con runner=auto
+          è accesa da sola sui runner che non sono nexus-core. Serve il secret BUILD_CACHE_S3 per
+          i runner effimeri; senza credenziali si salta.
+        required: false
+        default: false
+        type: boolean
       flutter_version:
         description: >-
           Solo con runner=github: la versione Flutter da scaricare (es. 3.47.4), la stessa del
@@ -194,6 +217,23 @@ on:
       # firma come oggi con la chiave della macchina.
       ANDROID_KEYSTORE:
         required: false
+      # Come ANDROID_KEYSTORE* con i nomi comuni a tutti gli stack (RELEASE_KEYSTORE_B64 è
+      # il keystore in base64): se ci sono, vincono. Il keystore finisce in un file
+      # temporaneo del job, cancellato a fine job.
+      RELEASE_KEYSTORE_B64:
+        required: false
+      RELEASE_KEYSTORE_PASSWORD:
+        required: false
+      RELEASE_KEY_ALIAS:
+        required: false
+      RELEASE_KEY_PASSWORD:
+        required: false
+      # Per runner=auto: PAT che legge i runner dell org e le code (azione pick-runner), e le
+      # credenziali del bucket della cache remota per i runner effimeri. Passati per nome.
+      RUNNER_PICK_TOKEN:
+        required: false
+      BUILD_CACHE_S3:
+        required: false
       # Vuoti = quelli di una chiave di debug: `android`, `androiddebugkey`, e la password
       # della chiave uguale a quella del keystore.
       ANDROID_KEYSTORE_PASSWORD:
@@ -218,11 +258,42 @@ on:
         required: false
 
 jobs:
+  # Solo con runner=auto. ubuntu-slim: il job dura pochi secondi e non deve occupare né nexus-core
+  # né un runner a pagamento. Senza token pick-runner ripiega su nexus-core.
+  pick:
+    name: Scelta del runner
+    if: ${{ inputs.runner == 'auto' }}
+    runs-on: ubuntu-slim
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+      profile: ${{ steps.pick.outputs.profile }}
+    steps:
+      - id: pick
+        uses: GabryXnLab/build-kit/pick-runner@auto-runner
+        with:
+          token: ${{ secrets.RUNNER_PICK_TOKEN }}
+          repos: kagami-private,Riftgate,ascend
+          ubicloud_size: ${{ inputs.ubicloud_size }}
+          target_arch: ${{ inputs.platform == 'linux' && 'arm64' || 'any' }}
+          allow: ${{ (inputs.platform != 'android' || secrets.RELEASE_KEYSTORE_B64 != '' || secrets.ANDROID_KEYSTORE != '' || secrets.ANDROID_DEBUG_KEYSTORE != '') && inputs.allow || 'nexus' }}
+      - name: Riepilogo
+        env:
+          RUNS_ON: ${{ steps.pick.outputs.runs_on }}
+          REASON: ${{ steps.pick.outputs.reason }}
+        run: echo "Runner scelto $RUNS_ON — $REASON" | tee -a "$GITHUB_STEP_SUMMARY"
+
   build:
     name: ${{ inputs.app_name }} · ${{ inputs.platform }} ${{ inputs.build_mode }}${{ inputs.split_per_abi && ' · per ABI' || '' }}
+    needs: pick
+    if: ${{ !cancelled() && needs.pick.result != 'failure' }}
     # iOS con self-hosted resta sul self-hosted e si ferma al primo step: un runner macOS
     # costa dieci volte i minuti di uno Linux, e non va acceso solo per dire l errore.
-    runs-on: ${{ inputs.runner == 'github' && (inputs.platform == 'ios' && 'macos-latest' || 'ubuntu-latest') || fromJSON('["self-hosted", "nexus-core"]') }}
+    runs-on: ${{ inputs.runner == 'auto' && fromJSON(needs.pick.outputs.runs_on) || (inputs.runner == 'github' && (inputs.platform == 'ios' && 'macos-latest' || 'ubuntu-latest') || fromJSON('["self-hosted", "nexus-core"]')) }}
+    env:
+      # nexus = nexus-core (percorsi e SDK della macchina, Box64) | ohos = self-hosted x86-64 senza
+      # /home/ubuntu né sudo | ephemeral = runner nuovo a ogni job (GitHub, Ubicloud). Decide gli
+      # step al posto di inputs.runner, che con auto non dice dove si gira.
+      PROFILE: ${{ inputs.runner == 'auto' && needs.pick.outputs.profile || (inputs.runner == 'github' && 'ephemeral' || 'nexus') }}
     steps:
       # «In corso» con ⏹ Annulla; lo step finale riscrive lo stesso messaggio. Senza i secret
       # di Telegram (repo pubblico, fork) l azione non manda niente.
@@ -247,7 +318,7 @@ jobs:
             android|linux) ;;
             ios)
               if [ "$RUNNER_KIND" != "github" ]; then
-                echo "::error::platform=ios compila solo su macOS: serve runner=github (macos-latest). Il self-hosted è Linux."
+                echo "::error::platform=ios compila solo su macOS: serve runner=github (macos-latest). Il self-hosted è Linux e auto sceglie solo runner Linux."
                 exit 1
               fi ;;
             *) echo "::error::platform non valida: '$PLATFORM' (attese: android | linux | ios)"; exit 1 ;;
@@ -261,7 +332,7 @@ jobs:
       # per ripartire puliti. Un runner GitHub è comunque nuovo a ogni job.
       - uses: actions/checkout@v4
         with:
-          clean: ${{ inputs.runner == 'github' }}
+          clean: ${{ env.PROFILE == 'ephemeral' }}
           ref: ${{ inputs.ref }}
           submodules: ${{ inputs.has_submodules && 'recursive' || 'false' }}
           token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
@@ -275,7 +346,7 @@ jobs:
       # condizione. PUB_CACHE fissa: senza, Flutter userebbe $HOME del runner e due job
       # concorrenti si contenderebbero lo stesso file.
       - name: Configure self-hosted environment
-        if: ${{ inputs.runner != 'github' }}
+        if: ${{ env.PROFILE == 'nexus' }}
         env:
           ANDROID_SDK: ${{ inputs.android_sdk }}
           JAVA: ${{ inputs.java_home }}
@@ -289,7 +360,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Set up Java (GitHub runner)
-        if: ${{ inputs.runner == 'github' && inputs.platform != 'ios' }}
+        if: ${{ env.PROFILE != 'nexus' && inputs.platform != 'ios' }}
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -298,7 +369,7 @@ jobs:
       # Su un runner x86-64 (e sul macOS di GitHub) la tarball ufficiale va bene: il divieto
       # di scaricare l SDK vale solo per nexus-core, che è Linux ARM64.
       - name: Set up Flutter (GitHub runner)
-        if: ${{ inputs.runner == 'github' }}
+        if: ${{ env.PROFILE != 'nexus' }}
         uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -309,7 +380,7 @@ jobs:
       # Dipendenze e risultati di Gradle da un run all altro: senza, ogni build scarica AGP,
       # Kotlin e tutte le librerie Android (quattro minuti nel primo run).
       - name: Gradle cache (GitHub runner)
-        if: ${{ inputs.runner == 'github' && inputs.platform == 'android' }}
+        if: ${{ env.PROFILE == 'ephemeral' && inputs.platform == 'android' }}
         uses: gradle/actions/setup-gradle@v4
         with:
           cache-read-only: false
@@ -322,7 +393,7 @@ jobs:
       # memoria dei processi: l APK è lo stesso. Sopra i 12 GB (runner dei repo pubblici)
       # restano i valori del progetto. Lo swap è la rete sotto: meglio lento che spento.
       - name: Fit Gradle to the runner (GitHub runner)
-        if: ${{ inputs.runner == 'github' && inputs.platform == 'android' }}
+        if: ${{ env.PROFILE == 'ephemeral' && inputs.platform == 'android' }}
         run: |
           set -euo pipefail
           CPUS=$(nproc)
@@ -362,7 +433,7 @@ jobs:
           fi
 
       - name: Linux desktop dependencies (GitHub runner)
-        if: ${{ inputs.runner == 'github' && inputs.platform == 'linux' }}
+        if: ${{ env.PROFILE == 'ephemeral' && inputs.platform == 'linux' }}
         run: sudo apt-get update && sudo apt-get install -y ninja-build libgtk-3-dev
 
       # La chiave arriva a Gradle da android/key.properties, la convenzione di Flutter per la
@@ -374,17 +445,16 @@ jobs:
         id: signing
         if: ${{ inputs.platform == 'android' }}
         env:
-          RUNNER_KIND: ${{ inputs.runner }}
-          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
-          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEYSTORE: ${{ secrets.RELEASE_KEYSTORE_B64 || secrets.ANDROID_KEYSTORE }}
+          STORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS || secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || secrets.ANDROID_KEY_PASSWORD }}
           DEBUG_KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
         run: |
           set -euo pipefail
-          if [ -z "$KEYSTORE" ] && [ "$RUNNER_KIND" = "github" ]; then KEYSTORE=$DEBUG_KEYSTORE; fi
+          if [ -z "$KEYSTORE" ] && [ "$PROFILE" != "nexus" ]; then KEYSTORE=$DEBUG_KEYSTORE; fi
           if [ -z "$KEYSTORE" ]; then
-            if [ "$RUNNER_KIND" = "github" ]; then
+            if [ "$PROFILE" != "nexus" ]; then
               echo "::warning::Né ANDROID_KEYSTORE né ANDROID_DEBUG_KEYSTORE: APK firmato con una chiave nuova, che non si installa sopra quella del telefono e che Google Sign-In non riconosce."
             fi
             exit 0
@@ -427,7 +497,7 @@ jobs:
           fi
 
       - name: Resolve Flutter SDK
-        if: ${{ inputs.runner != 'github' }}
+        if: ${{ env.PROFILE == 'nexus' }}
         env:
           FLUTTER_SDK: ${{ inputs.flutter_sdk }}
         run: |
@@ -442,11 +512,13 @@ jobs:
       # Worker, cache condivise della macchina e clear_cache di sola esecuzione: il pezzo
       # comune a tutte le build, in GabryXnLab/build-kit.
       - name: Tune build
-        uses: GabryXnLab/build-kit/setup@main
+        uses: GabryXnLab/build-kit/setup@auto-runner
         with:
-          runner: ${{ inputs.runner }}
+          runner: ${{ env.PROFILE == 'nexus' && 'self-hosted' || (env.PROFILE == 'ohos' && 'ohos' || (inputs.runner == 'github' && 'github' || 'ubicloud')) }}
           max_workers: ${{ inputs.max_workers }}
           clear_cache: ${{ inputs.clear_cache }}
+          remote_cache: ${{ inputs.remote_cache || (inputs.runner == 'auto' && env.PROFILE != 'nexus') }}
+          cache_env: ${{ env.PROFILE == 'ephemeral' && secrets.BUILD_CACHE_S3 || '' }}
 
       - name: Flutter doctor
         run: |
@@ -479,7 +551,7 @@ jobs:
       # `debug` non ci passa: è JIT e non usa `gen_snapshot`.
       - name: x86-64 emulator for gen_snapshot
         id: x86
-        if: ${{ inputs.runner != 'github' && inputs.platform == 'android' && inputs.build_mode != 'debug' }}
+        if: ${{ env.PROFILE == 'nexus' && inputs.platform == 'android' && inputs.build_mode != 'debug' }}
         uses: GabryXnLab/build-kit/x86-64@main
         with:
           emulator: ${{ inputs.x86_emulator }}
@@ -761,5 +833,5 @@ jobs:
           SIGNING: ${{ steps.signing.outputs.written }}
           FIREBASE: ${{ steps.firebase.outputs.written }}
         run: |
-          if [ "$SIGNING" = "true" ]; then rm -f android/key.properties; fi
+          if [ "$SIGNING" = "true" ]; then rm -f android/key.properties "$RUNNER_TEMP/signing.keystore"; fi
           if [ "$FIREBASE" = "true" ]; then rm -f android/app/google-services.json; fi

@@ -43,11 +43,11 @@ on:
         type: string
       remote_cache:
         description: >-
-          true = cache remota (Gradle) sul bucket OCI anche fuori da runner=auto. Con runner=auto
-          è accesa da sola sui runner che non sono nexus-core. Serve il secret BUILD_CACHE_S3 per
-          i runner effimeri; senza credenziali si salta.
+          Cache remota (Gradle) sul bucket OCI su ogni runner, nexus-core compreso; false la
+          spegne. Serve il secret BUILD_CACHE_S3 per i runner effimeri; senza credenziali si
+          salta, e clear_cache la spegne comunque.
         required: false
-        default: false
+        default: true
         type: boolean
       flutter_version:
         description: >-
@@ -567,7 +567,7 @@ jobs:
           runner: ${{ env.PROFILE == 'nexus' && 'self-hosted' || (env.PROFILE == 'ohos' && 'ohos' || (inputs.runner == 'github' && 'github' || 'ubicloud')) }}
           max_workers: ${{ inputs.max_workers }}
           clear_cache: ${{ inputs.clear_cache }}
-          remote_cache: ${{ inputs.remote_cache || (inputs.runner == 'auto' && env.PROFILE != 'nexus') }}
+          remote_cache: ${{ inputs.remote_cache }}
           cache_env: ${{ env.PROFILE == 'ephemeral' && secrets.BUILD_CACHE_S3 || '' }}
 
       # Kagami chiede a Gradle 8 GB di heap e 4 di Metaspace, pensati per nexus-core: ohos ha

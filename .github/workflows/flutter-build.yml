@@ -294,6 +294,13 @@ jobs:
       # /home/ubuntu né sudo | ephemeral = runner nuovo a ogni job (GitHub, Ubicloud). Decide gli
       # step al posto di inputs.runner, che con auto non dice dove si gira.
       PROFILE: ${{ inputs.runner == 'auto' && needs.pick.outputs.profile || (inputs.runner == 'github' && 'ephemeral' || 'nexus') }}
+      # Dipendenze (pub-cache, moduli e wrapper di Gradle) come archivi sul bucket S3 invece di
+      # actions/cache: solo ohos e Ubicloud (docs/cache-contract.md di build-kit). nexus e il
+      # runner GitHub restano come prima.
+      S3C: ${{ inputs.runner == 'auto' && needs.pick.outputs.profile != 'nexus' }}
+      S3C_PUB: pub-cache|~/.pub-cache|**/pubspec.lock|flutter-${{ inputs.flutter_version || 'stable' }}
+      S3C_GRADLE: ${{ inputs.platform == 'android' && 'gradle-modules|~/.gradle/caches/modules-2|**/*.gradle,**/*.gradle.kts,**/gradle-wrapper.properties,**/libs.versions.toml,**/pubspec.lock|gradle-1' || '' }}
+      S3C_WRAPPER: ${{ inputs.platform == 'android' && 'gradle-wrapper|~/.gradle/wrapper/dists|**/gradle-wrapper.properties|gradle-1' || '' }}
     steps:
       # «In corso» con ⏹ Annulla; lo step finale riscrive lo stesso messaggio. Senza i secret
       # di Telegram (repo pubblico, fork) l azione non manda niente.
@@ -375,9 +382,9 @@ jobs:
           channel: stable
           flutter-version: ${{ inputs.flutter_version }}
           # SDK e pub cache: il download dell SDK era un minuto a ogni run. Su ohos il runner non è
-          # effimero: l SDK resta nel tool cache e la pub cache in $HOME, e caricarli nella cache
-          # di GitHub (ripristino da 1 GB a ogni run) costerebbe solo tempo e quota.
-          cache: ${{ env.PROFILE == 'ephemeral' }}
+          # effimero (SDK nel tool cache, pub cache in $HOME) e con S3C la pub cache sta nel bucket
+          # (s3-cache): in entrambi i casi actions/cache si spegne.
+          cache: ${{ env.PROFILE == 'ephemeral' && env.S3C != 'true' }}
 
       # ohos non ha SDK Android: l utente `ci` è senza sudo e l SDK sta in $HOME, rimasto fra i run.
       # L azione accetta le licenze, così AGP scarica da solo platform, build-tools e NDK che il
@@ -400,6 +407,19 @@ jobs:
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
 
+      - name: Restore dependency archives (S3)
+        if: ${{ env.S3C == 'true' }}
+        uses: GabryXnLab/build-kit/s3-cache@s3-cache
+        with:
+          mode: restore
+          stack: flutter
+          items: |
+            ${{ env.S3C_PUB }}
+            ${{ env.S3C_GRADLE }}
+            ${{ env.S3C_WRAPPER }}
+          cache_env: ${{ env.PROFILE == 'ephemeral' && secrets.BUILD_CACHE_S3 || '' }}
+          clear_cache: ${{ inputs.clear_cache }}
+
       # Dipendenze e risultati di Gradle da un run all altro: senza, ogni build scarica AGP,
       # Kotlin e tutte le librerie Android (quattro minuti nel primo run).
       - name: Gradle cache (GitHub runner)
@@ -407,6 +427,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           cache-read-only: false
+          cache-disabled: ${{ env.S3C == 'true' }}
 
       # Il runner standard di un repo privato ha 2 CPU e 7 GB: i progetti tarano Gradle su
       # nexus-core (Kagami chiede 8 GB di heap e 4 di Metaspace), e con il demone Kotlin
@@ -847,6 +868,18 @@ jobs:
       # file su Telegram; senza artifact manca solo il pulsante «Rimanda artefatti».
       # Un wrapper può chiamare il reusable due volte nello stesso run (per ABI e universale):
       # il nome dell'artifact deve distinguerle, o il secondo upload fallirebbe.
+      - name: Save dependency archives (S3)
+        if: ${{ success() && env.S3C == 'true' }}
+        uses: GabryXnLab/build-kit/s3-cache@s3-cache
+        with:
+          mode: save
+          stack: flutter
+          items: |
+            ${{ env.S3C_PUB }}
+            ${{ env.S3C_GRADLE }}
+            ${{ env.S3C_WRAPPER }}
+          cache_env: ${{ env.PROFILE == 'ephemeral' && secrets.BUILD_CACHE_S3 || '' }}
+
       - uses: actions/upload-artifact@v4
         continue-on-error: true
         with:

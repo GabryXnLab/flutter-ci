@@ -374,8 +374,31 @@ jobs:
         with:
           channel: stable
           flutter-version: ${{ inputs.flutter_version }}
-          # SDK e pub cache: il download dell SDK era un minuto a ogni run.
-          cache: true
+          # SDK e pub cache: il download dell SDK era un minuto a ogni run. Su ohos il runner non è
+          # effimero: l SDK resta nel tool cache e la pub cache in $HOME, e caricarli nella cache
+          # di GitHub (ripristino da 1 GB a ogni run) costerebbe solo tempo e quota.
+          cache: ${{ env.PROFILE == 'ephemeral' }}
+
+      # ohos non ha SDK Android: l utente `ci` è senza sudo e l SDK sta in $HOME, rimasto fra i run.
+      # L azione accetta le licenze, così AGP scarica da solo platform, build-tools e NDK che il
+      # progetto chiede; i binari x86-64 generici girano con nix-ld.
+      # Su ohos setup-java è uscito verde senza aver installato nulla, con il download fermo a metà
+      # (run 39761287988): così l errore compare qui e non come «JAVA_HOME is not set» più avanti.
+      - name: Check JDK (ohos)
+        if: ${{ env.PROFILE == 'ohos' && inputs.platform == 'android' }}
+        run: |
+          if [ ! -x "${JAVA_HOME:-/nonexistent}/bin/java" ]; then
+            echo "::error::setup-java non ha installato il JDK (download interrotto?): rilanciare il job"
+            exit 1
+          fi
+
+      - name: Set up Android SDK (ohos)
+        if: ${{ env.PROFILE == 'ohos' && inputs.platform == 'android' }}
+        uses: android-actions/setup-android@v3
+        # Il predefinito chiede anche «tools», che con cmdline-tools 16 non esiste più e fa uscire sdkmanager con 1.
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       # Dipendenze e risultati di Gradle da un run all altro: senza, ogni build scarica AGP,
       # Kotlin e tutte le librerie Android (quattro minuti nel primo run).
@@ -519,6 +542,26 @@ jobs:
           clear_cache: ${{ inputs.clear_cache }}
           remote_cache: ${{ inputs.remote_cache || (inputs.runner == 'auto' && env.PROFILE != 'nexus') }}
           cache_env: ${{ env.PROFILE == 'ephemeral' && secrets.BUILD_CACHE_S3 || '' }}
+
+      # Kagami chiede a Gradle 8 GB di heap e 4 di Metaspace, pensati per nexus-core: ohos ha
+      # MemoryMax=10G per tutto il runner (e gioco o emulatore sulla stessa macchina), quindi
+      # quei valori sono un OOM quasi certo. GRADLE_OPTS -D e ORG_GRADLE_PROJECT_ prevalgono su
+      # gradle.properties del progetto e cambiano solo la memoria dei processi: l APK è lo stesso.
+      # Il tetto ai worker vale solo se max_workers=auto (un numero esplicito lo ha scelto chi lancia).
+      - name: Fit Gradle to ohos
+        if: ${{ env.PROFILE == 'ohos' && inputs.platform == 'android' }}
+        env:
+          MAX_WORKERS: ${{ inputs.max_workers }}
+        run: |
+          set -euo pipefail
+          OPTS='-Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g -XX:ReservedCodeCacheSize=256m"'
+          if [ "$MAX_WORKERS" = "auto" ]; then
+            N=$(grep -oE 'org.gradle.workers.max=[0-9]+' <<< "${GRADLE_OPTS:-}" | tail -1 | cut -d= -f2)
+            if [ "${N:-4}" -gt 4 ]; then OPTS="$OPTS -Dorg.gradle.workers.max=4"; fi
+          fi
+          echo "GRADLE_OPTS=${GRADLE_OPTS:+$GRADLE_OPTS }$OPTS" >> "$GITHUB_ENV"
+          echo "ORG_GRADLE_PROJECT_kotlin.daemon.jvmargs=-Xmx1536m" >> "$GITHUB_ENV"
+          echo "GRADLE_OPTS per ohos: $OPTS"
 
       - name: Flutter doctor
         run: |

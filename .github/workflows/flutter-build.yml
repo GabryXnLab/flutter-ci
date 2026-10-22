@@ -194,7 +194,7 @@ on:
       artifact_retention_days:
         description: 'Giorni di conservazione dell artifact del run.'
         required: false
-        default: 7
+        default: 3
         type: number
       telegram_topic_id:
         description: 'Topic del supergruppo Telegram in cui pubblicare la notifica (message_thread_id). Vuoto = nessuna notifica.'

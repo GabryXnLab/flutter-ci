@@ -382,6 +382,16 @@ jobs:
       # ohos non ha SDK Android: l utente `ci` è senza sudo e l SDK sta in $HOME, rimasto fra i run.
       # L azione accetta le licenze, così AGP scarica da solo platform, build-tools e NDK che il
       # progetto chiede; i binari x86-64 generici girano con nix-ld.
+      # Su ohos setup-java è uscito verde senza aver installato nulla, con il download fermo a metà
+      # (run 39761287988): così l errore compare qui e non come «JAVA_HOME is not set» più avanti.
+      - name: Check JDK (ohos)
+        if: ${{ env.PROFILE == 'ohos' && inputs.platform == 'android' }}
+        run: |
+          if [ ! -x "${JAVA_HOME:-/nonexistent}/bin/java" ]; then
+            echo "::error::setup-java non ha installato il JDK (download interrotto?): rilanciare il job"
+            exit 1
+          fi
+
       - name: Set up Android SDK (ohos)
         if: ${{ env.PROFILE == 'ohos' && inputs.platform == 'android' }}
         uses: android-actions/setup-android@v3

@@ -201,6 +201,10 @@ on:
         required: false
         default: ''
         type: string
+    outputs:
+      cache_summary:
+        description: 'Riga compatta chiave=valore di build-kit/summary (runner, arch, fasi, sccache, gradle, s3).'
+        value: ${{ jobs.build.outputs.cache_summary }}
     secrets:
       TELEGRAM_BOT_TOKEN:
         required: false
@@ -289,6 +293,8 @@ jobs:
     # iOS con self-hosted resta sul self-hosted e si ferma al primo step: un runner macOS
     # costa dieci volte i minuti di uno Linux, e non va acceso solo per dire l errore.
     runs-on: ${{ inputs.runner == 'auto' && fromJSON(needs.pick.outputs.runs_on) || (inputs.runner == 'github' && (inputs.platform == 'ios' && 'macos-latest' || 'ubuntu-latest') || fromJSON('["self-hosted", "nexus-core"]')) }}
+    outputs:
+      cache_summary: ${{ steps.cache_summary.outputs.line }}
     env:
       # nexus = nexus-core (percorsi e SDK della macchina, Box64) | ohos = self-hosted x86-64 senza
       # /home/ubuntu né sudo | ephemeral = runner nuovo a ogni job (GitHub, Ubicloud). Decide gli
@@ -409,7 +415,7 @@ jobs:
 
       - name: Restore dependency archives (S3)
         if: ${{ env.S3C == 'true' }}
-        uses: GabryXnLab/build-kit/s3-cache@main
+        uses: GabryXnLab/build-kit/s3-cache@build-veloci-f1
         with:
           mode: restore
           stack: flutter
@@ -556,7 +562,7 @@ jobs:
       # Worker, cache condivise della macchina e clear_cache di sola esecuzione: il pezzo
       # comune a tutte le build, in GabryXnLab/build-kit.
       - name: Tune build
-        uses: GabryXnLab/build-kit/setup@main
+        uses: GabryXnLab/build-kit/setup@build-veloci-f1
         with:
           runner: ${{ env.PROFILE == 'nexus' && 'self-hosted' || (env.PROFILE == 'ohos' && 'ohos' || (inputs.runner == 'github' && 'github' || 'ubicloud')) }}
           max_workers: ${{ inputs.max_workers }}
@@ -870,7 +876,7 @@ jobs:
       # il nome dell'artifact deve distinguerle, o il secondo upload fallirebbe.
       - name: Save dependency archives (S3)
         if: ${{ success() && env.S3C == 'true' }}
-        uses: GabryXnLab/build-kit/s3-cache@main
+        uses: GabryXnLab/build-kit/s3-cache@build-veloci-f1
         with:
           mode: save
           stack: flutter
@@ -886,6 +892,14 @@ jobs:
           name: ${{ inputs.app_name }}-${{ inputs.platform }}-${{ inputs.build_mode }}${{ inputs.split_per_abi && '-per-abi' || '' }}-${{ github.sha }}
           path: ${{ steps.output.outputs.upload }}
           retention-days: ${{ inputs.artifact_retention_days }}
+
+      - name: Cache summary
+        id: cache_summary
+        if: ${{ always() }}
+        uses: GabryXnLab/build-kit/summary@build-veloci-f1
+        with:
+          stack: flutter
+          profile: ${{ env.PROFILE }}
 
       # Esito sempre (azione in GabryXnLab/build-kit, bot ci-bot): l'artefatto se il job riesce,
       # altrimenti il pulsante per rilanciare il run. Best-effort.

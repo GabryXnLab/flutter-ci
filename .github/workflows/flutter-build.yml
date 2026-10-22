@@ -269,7 +269,7 @@ jobs:
       profile: ${{ steps.pick.outputs.profile }}
     steps:
       - id: pick
-        uses: GabryXnLab/build-kit/pick-runner@auto-runner
+        uses: GabryXnLab/build-kit/pick-runner@main
         with:
           token: ${{ secrets.RUNNER_PICK_TOKEN }}
           repos: kagami-private,Riftgate,ascend
@@ -512,7 +512,7 @@ jobs:
       # Worker, cache condivise della macchina e clear_cache di sola esecuzione: il pezzo
       # comune a tutte le build, in GabryXnLab/build-kit.
       - name: Tune build
-        uses: GabryXnLab/build-kit/setup@auto-runner
+        uses: GabryXnLab/build-kit/setup@main
         with:
           runner: ${{ env.PROFILE == 'nexus' && 'self-hosted' || (env.PROFILE == 'ohos' && 'ohos' || (inputs.runner == 'github' && 'github' || 'ubicloud')) }}
           max_workers: ${{ inputs.max_workers }}

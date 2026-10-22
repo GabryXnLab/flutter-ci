@@ -385,6 +385,10 @@ jobs:
       - name: Set up Android SDK (ohos)
         if: ${{ env.PROFILE == 'ohos' && inputs.platform == 'android' }}
         uses: android-actions/setup-android@v3
+        # Il predefinito chiede anche «tools», che con cmdline-tools 16 non esiste più e fa uscire sdkmanager con 1.
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       # Dipendenze e risultati di Gradle da un run all altro: senza, ogni build scarica AGP,
       # Kotlin e tutte le librerie Android (quattro minuti nel primo run).

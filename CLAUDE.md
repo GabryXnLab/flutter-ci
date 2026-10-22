@@ -44,6 +44,7 @@ gh workflow list --repo GabryXnLab/<progetto>   # i wrapper che chiamano questi 
   SHA: un push qui cambia il comportamento di ogni progetto al run successivo. Gli input
   restano retrocompatibili — se ne aggiungono con `default`, non se ne rinominano né
   rimuovono senza aggiornare tutti i wrapper.
+- **Profilo `ohos` (runner `ohos`, `auto`).** JDK 17 e SDK Android da azioni (`setup-java`, `sdkmanager`) senza apt/sudo, con controllo che il JDK ci sia davvero; gli strumenti restano nella `_tool` persistente del runner; memoria di Gradle/Kotlin ridotta (`Xmx4g`, workers max 4) perché il PC è anche il desktop del proprietario. Il watcher di ohos ferma il runner sotto pressione di memoria.
 - **Di norma tutto gira su nexus-core; `runner: github` è l'eccezione.** Serve quando
   la macchina non deve prendere altro carico. Su `ubuntu-latest` si saltano gli step
   del self-hosted (SDK in `PATH`, QEMU, `env` della macchina scritto in `GITHUB_ENV` e
